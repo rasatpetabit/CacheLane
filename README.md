@@ -513,3 +513,8 @@ stateDiagram-v2
 ## License
 
 [Apache-2.0](LICENSE)
+
+## Knowledge
+
+Structured project knowledge is cataloged in the `.okf/` directory.
+See [`.okf/index.md`](.okf/index.md) for the repo's knowledge index.

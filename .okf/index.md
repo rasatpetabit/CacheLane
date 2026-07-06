@@ -1,5 +1,6 @@
 ---
 type: index
+resource: /srv/dev/okf-workspace/repos/ai/cachelane.md
 title: CacheLane — knowledge catalog index
 timestamp: 2026-07-01T00:00:00Z
 privacy: private

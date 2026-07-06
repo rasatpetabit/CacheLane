@@ -85,3 +85,17 @@ For each milestone (M2 → M9), follow this discipline:
 **Test discipline (lean):** one assertion per test where possible; table-driven (`describe.each`) for enumerable cases (e.g., all 11 `BlockKind` values); fixtures as JSON so reviewers can audit without parsing test code. Keep test files focused — split when one file grows past ~300 lines.
 
 **Node version:** Storage tests require Node 20 (`better-sqlite3` native binding fails on Node 24). Pin CI to `actions/setup-node@v4` with `node-version: 20`.
+<!-- agent-dispatch:begin routing hash=91201f5fd8778421b77e96a3b48cdf126230bbc35f8af4bbf99d75e3cf7eb275 -->
+## §routing — managed by agent-dispatch (do not hand-edit)
+
+Binding rules (enforced by PreToolUse guard):
+- haiku: override-only (live override grant required).
+- sonnet: override-only (live override grant required).
+- model param MUST be explicit — missing model is denied (exception: harness built-ins Explore/Plan inherit the frontier session model).
+
+For the full routing policy, fallback chains, and backend health:
+  agent-dispatch digest          # live, from the canonical policy file
+  agent-dispatch resolve <class> # deterministic tier for a task class
+
+Source of truth: policy/dispatch-policy.jsonc in the agent-dispatch repo (run `agent-dispatch where` for its root).
+<!-- agent-dispatch:end -->
