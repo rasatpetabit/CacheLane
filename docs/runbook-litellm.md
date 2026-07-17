@@ -329,6 +329,13 @@ Two data homes (do not mix them):
 node /srv/cachelane/scripts/stats-dual.mjs
 ```
 
+### Daily trend log
+```bash
+# timer: cachelane-stats-snapshot.timer → ~/.cachelane-ops/stats-snapshots.jsonl
+node /srv/cachelane/scripts/stats-snapshot.mjs
+tail -5 ~/.cachelane-ops/stats-snapshots.jsonl
+```
+
 ### CLI (pick a home)
 ```bash
 # Pi path (most traffic today)

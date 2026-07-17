@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { homedir } from "node:os";
 
 import {
   cachelaneConfigPath,
@@ -338,14 +339,24 @@ export function installCachelane(env: NodeJS.ProcessEnv = process.env): InstallR
   })();
 
   const mcpConfig = readJsonObject(mcpPath);
-  const servers = isObject(mcpConfig.mcpServers) ? mcpConfig.mcpServers : {};
+  const servers = isObject(mcpConfig.mcpServers) ? { ...(mcpConfig.mcpServers as JsonObject) } : {};
   const nextServer = {
     command: nodeExec,
     args: [cliScript, "mcp"],
     env: { CACHELANE_HOME: cachelaneHome(env) },
   };
+  // Dual-home: primary server follows install CACHELANE_HOME (Claude Code → Anthropic).
+  // Optional Pi/LiteLLM stats server when the smoke home exists on this host.
   const beforeMcp = stable(mcpConfig);
   servers.cachelane = nextServer;
+  const piHome = path.join(homedir(), ".cachelane-smoke");
+  if (fs.existsSync(piHome)) {
+    servers["cachelane-pi"] = {
+      command: nodeExec,
+      args: [cliScript, "mcp"],
+      env: { CACHELANE_HOME: piHome },
+    };
+  }
   mcpConfig.mcpServers = servers;
   const afterMcp = stable(mcpConfig);
   if (beforeMcp !== afterMcp) {
