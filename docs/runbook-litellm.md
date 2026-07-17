@@ -6,10 +6,10 @@ Status (2026-07-17, epyc2):
 |---|---|
 | Phase 1a smoke | **PASSED** (2026-07-16) |
 | Phase 2 OpenAI K-pruning | **COMMITTED** (`0b95a49`) + live-verified on :7332 |
-| Shadow mode | **ON** (`features.mutation_enabled=false`) |
-| Canaries (option 3) | **PASSED** 2026-07-17 — grok-4.5 / streaming / long context / multi-turn prune estimates |
+| Shadow mode | **PASSED** then graduated to live pruning |
+| Canaries (option 3, shadow) | **PASSED** 2026-07-17 — grok-4.5 / streaming / long context / multi-turn prune estimates |
+| Live pruning (`mutation_enabled=true`) | **ON + canary-verified** 2026-07-17 on smoke instance |
 | Live Pi `litellm.baseUrl` repoint | **NOT done** — separate confirmation required |
-| Live pruning (`mutation_enabled=true`) | **NOT done** — next gated step after shadow soak |
 
 ## Topology
 
@@ -30,8 +30,8 @@ export CACHELANE_HOME=~/.cachelane-smoke
 #   proxy.upstream_port=4000
 #   proxy.upstream_ssl=false
 #   features.auto_proxy=false
-#   features.mutation_enabled=false   # shadow
-#   features.k_pruner=true            # still compute reclaim estimates
+#   features.mutation_enabled=true    # LIVE pruning (was false during shadow)
+#   features.k_pruner=true
 cd /srv/dev/ai/cachelane
 node dist/cli/index.cjs proxy
 ```
@@ -99,15 +99,37 @@ Sticky multi-turn sessions use header `x-claude-code-session-id`.
 3. Anthropic-path tokenizer model-table is still Claude-centric (OpenAI/heuristic
    path via `countCompressionTokens` is fine for chat-completions).
 
+## Live pruning canaries (2026-07-17)
+
+Config flip (no restart; per-request loadConfig):
+
+```bash
+# ~/.cachelane-smoke/config.json
+"features": { "mutation_enabled": true, "k_pruner": true, "auto_proxy": false, "keepalive": true }
+```
+
+Proof that the **upstream body is stubbed** (not just estimated): prompt tokens collapse at K=3.
+
+| Model | turns 1–3 prompt toks | turn 4 | turn 5 | signals @4+ |
+|---|---|---|---|---|
+| qwen36-27b | 3187 → 3221 | **308** | **321** | `pruned:2`, `request_mutated=1`, no `mode:baseline` |
+| grok-4.5 | 6339 → 6369 | **460** | **473** | `pruned:2`, `request_mutated=1`, no `mode:baseline` |
+
+Decision-time reclaim on first prune fire: ~2874 (qwen) / ~2876 (grok).
+Streaming (qwen) + short grok still 200 under live mode.
+Artifact: `/tmp/cachelane-canary-live.json`.
+
+Rollback to shadow: set `mutation_enabled=false` in `~/.cachelane-smoke/config.json` (hot).
+
 ## Next gates (do NOT skip)
 
-1. **Shadow soak** — leave `mutation_enabled=false` and collect reclaim estimates on
-   more sessions (optional: point a disposable client at :7332).
-2. **Enable live pruning** — flip `mutation_enabled=true` on the smoke instance only;
-   re-run canaries; confirm stubs land in the upstream body and agents still complete.
-3. **Pi repoint** (separate confirmation): `~/.pi/agent/models.json` litellm
+1. ~~Shadow soak / live pruning~~ — **done** on smoke (see above).
+2. **Pi repoint** (separate confirmation): `~/.pi/agent/models.json` litellm
    `baseUrl` → `http://127.0.0.1:7332/v1` (upstream stays :4000). Rollback = one line.
-4. Model-routing consolidation audit + 7-day soak (plan Task #12).
+   Do **not** do this without an explicit go-ahead — it puts real Pi traffic through CacheLane.
+3. Model-routing consolidation audit + 7-day soak (plan Task #12).
+4. Follow-ups before broad multi-client: `blocks.id` session-scoped PK; stop extract
+   UPSERT from clearing `is_stub`.
 
 ## Ops notes
 
