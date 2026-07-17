@@ -27,6 +27,7 @@ HOME_CLAUDE="${CACHELANE_CLAUDE_HOME:-$HOME/.cachelane-claude}"
 mkdir -p "$HOME_LITELLM" "$HOME_CLAUDE"
 # legacy names
 [[ -e "$HOME/.cachelane-smoke" ]] || ln -sfn "$(basename "$HOME_LITELLM")" "$HOME/.cachelane-smoke"
+[[ -e "$HOME/.cachelane-openai" ]] || ln -sfn "$(basename "$HOME_LITELLM")" "$HOME/.cachelane-openai"
 if [[ -d "$HOME/.cachelane" && ! -L "$HOME/.cachelane" && "$HOME/.cachelane" -ef "$HOME_CLAUDE" ]]; then
   : # already same
 elif [[ ! -e "$HOME/.cachelane" ]]; then
@@ -55,7 +56,7 @@ TimeoutStopSec=15
 KillMode=mixed
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$HOME_LITELLM $HOME/.cachelane-smoke
+ReadWritePaths=$HOME_LITELLM $HOME/.cachelane-openai $HOME/.cachelane-smoke
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
