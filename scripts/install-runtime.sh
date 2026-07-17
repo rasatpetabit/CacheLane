@@ -8,18 +8,61 @@ set -euo pipefail
 INSTALL="${CACHELANE_INSTALL:-/srv/cachelane}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UNIT_DIR=/etc/systemd/system
+NODE_BIN=/usr/bin/node
+RUNTIME_NODE_DIR="$(dirname "$NODE_BIN")"
+STAGE=""
+BACKUP=""
 
-echo "Installing CacheLane from $REPO_ROOT → $INSTALL"
-sudo mkdir -p "$INSTALL"
-sudo rsync -a --delete \
-  --exclude '.git' --exclude 'node_modules' --exclude '.worktrees' \
-  "$REPO_ROOT/" "$INSTALL/"
-# Prefer already-built dist in repo; otherwise build
-if [[ ! -f "$INSTALL/dist/cli/index.cjs" ]]; then
-  (cd "$INSTALL" && npm ci && npm run build)
+cleanup_stage() {
+  if [[ -n "$STAGE" && -d "$STAGE" ]]; then
+    rm -rf -- "$STAGE"
+  fi
+}
+trap cleanup_stage EXIT
+
+if [[ ! -x "$NODE_BIN" ]]; then
+  echo "error: required runtime $NODE_BIN is missing" >&2
+  exit 1
 fi
-git -C "$REPO_ROOT" rev-parse HEAD | sudo tee "$INSTALL/GIT_SHA" >/dev/null
-date -u +%Y-%m-%dT%H:%M:%SZ | sudo tee "$INSTALL/INSTALLED_AT" >/dev/null
+NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')"
+if [[ ! "$NODE_MAJOR" =~ ^[0-9]+$ ]] || (( NODE_MAJOR < 22 )); then
+  echo "error: CacheLane requires Node >=22; $NODE_BIN reports $("$NODE_BIN" --version)" >&2
+  exit 1
+fi
+
+echo "Building CacheLane with $("$NODE_BIN" --version) from $REPO_ROOT"
+(cd "$REPO_ROOT" && PATH="$RUNTIME_NODE_DIR:$PATH" npm ci && npm run build)
+if [[ ! -f "$REPO_ROOT/dist/cli/index.cjs" ]]; then
+  echo "error: build did not produce dist/cli/index.cjs" >&2
+  exit 1
+fi
+
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/cachelane-runtime.XXXXXX")"
+mkdir -p "$STAGE/dist" "$STAGE/scripts"
+rsync -a "$REPO_ROOT/dist/" "$STAGE/dist/"
+rsync -a "$REPO_ROOT/scripts/" "$STAGE/scripts/"
+cp -a "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$STAGE/"
+(cd "$STAGE" && PATH="$RUNTIME_NODE_DIR:$PATH" npm ci --omit=dev)
+(cd "$STAGE" && "$NODE_BIN" --input-type=commonjs -e \
+  'const Database = require("better-sqlite3"); const db = new Database(":memory:"); db.prepare("SELECT 1").get(); db.close();')
+git -C "$REPO_ROOT" rev-parse HEAD > "$STAGE/GIT_SHA"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$STAGE/INSTALLED_AT"
+
+if [[ "${CACHELANE_DEPLOY_DRY_RUN:-0}" == "1" ]]; then
+  echo "dry run passed: build, production dependency install, and native SQLite smoke"
+  echo "production was not changed"
+  exit 0
+fi
+
+BACKUP="${INSTALL}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+if sudo test -d "$INSTALL"; then
+  echo "Backing up current runtime to $BACKUP"
+  sudo cp -a --reflink=auto "$INSTALL" "$BACKUP"
+fi
+
+echo "Installing staged runtime to $INSTALL"
+sudo mkdir -p "$INSTALL"
+sudo rsync -a --delete "$STAGE/" "$INSTALL/"
 
 # Home dirs (canonical names + back-compat symlinks)
 HOME_LITELLM="${CACHELANE_LITELLM_HOME:-$HOME/.cachelane-litellm}"
@@ -167,8 +210,22 @@ UNIT
 systemctl --user disable --now cachelane-smoke.service cachelane-anthropic.service 2>/dev/null || true
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now cachelane-litellm.service cachelane-claude.service cachelane-healthcheck.timer
-sudo systemctl restart cachelane-litellm.service cachelane-claude.service
+sudo systemctl enable cachelane-litellm.service cachelane-claude.service cachelane-healthcheck.timer
+# No-op on upgrades; ensures both lanes exist before the dual health gate on a first install.
+sudo systemctl start cachelane-litellm.service cachelane-claude.service
+
+echo "Restarting LiteLLM lane"
+sudo systemctl restart cachelane-litellm.service
 sleep 1
-node "$INSTALL/scripts/health-dual.mjs"
+"$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
+
+echo "Restarting Claude lane"
+sudo systemctl restart cachelane-claude.service
+sleep 1
+"$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
+
+sudo systemctl start cachelane-healthcheck.timer
 echo "installed $(cat "$INSTALL/GIT_SHA") at $(cat "$INSTALL/INSTALLED_AT")"
+if [[ -n "$BACKUP" ]]; then
+  echo "previous runtime preserved at $BACKUP"
+fi

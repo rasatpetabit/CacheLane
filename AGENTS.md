@@ -74,7 +74,7 @@ Pre-extracted plain text at `/tmp/cachelane-extracts/` (regenerate with pandoc i
 For each milestone (M2 → M9), follow this discipline:
 
 1. **Plan** — Read the binding spec sections for the milestone (in `/designs/`). Draft a plan file under `docs/superpowers/plans/YYYY-MM-DD-mN-<topic>.md` using the M1 plan as a template.
-2. **Branch** — `superpowers:using-git-worktrees` to create `feat/mN-<topic>` off `main`. Confirm Node 20 (`nvm use 20`) and a green baseline (`npm test`) before writing code.
+2. **Branch** — `superpowers:using-git-worktrees` to create `feat/mN-<topic>` off `main`. Confirm Node 22 (`nvm use 22`) and a green baseline (`npm test`) before writing code.
 3. **TDD per task** — `superpowers:test-driven-development`. Write fixtures + red tests first. Watch them fail for the right reason. Implement minimum to green. No mocks unless crossing a process/network boundary.
 4. **Lean code** — One module per milestone unless the spec says otherwise. No new npm deps without an ADR. snake_case for storage/API-contract types; camelCase for in-process working types. Vocabulary: `STABLE | SEMI | VOLATILE` everywhere — no synonyms.
 5. **Subagent delegation** — `superpowers:subagent-driven-development` when tasks are independent (e.g., fixtures + glob helper + rules can run in parallel agents). Two-stage review (spec compliance, then code quality).
@@ -84,7 +84,9 @@ For each milestone (M2 → M9), follow this discipline:
 
 **Test discipline (lean):** one assertion per test where possible; table-driven (`describe.each`) for enumerable cases (e.g., all 11 `BlockKind` values); fixtures as JSON so reviewers can audit without parsing test code. Keep test files focused — split when one file grows past ~300 lines.
 
-**Node version:** Storage tests require Node 20 (`better-sqlite3` native binding fails on Node 24). Pin CI to `actions/setup-node@v4` with `node-version: 20`.
+**Node version:** Node 22 is the minimum runtime and local development baseline. CI runs the
+full suite on Node 22 and Node 24 LTS. `better-sqlite3` must remain on a release line with
+prebuilt bindings for both majors; see ADR-013.
 <!-- agent-dispatch:begin routing hash=91201f5fd8778421b77e96a3b48cdf126230bbc35f8af4bbf99d75e3cf7eb275 -->
 ## §routing — managed by agent-dispatch (do not hand-edit)
 

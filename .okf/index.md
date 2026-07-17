@@ -47,8 +47,8 @@ working with `cachelane doctor`, `cachelane sessions`, `cachelane stats`.
 ## Tech stack (grounded in repo files observed)
 
 - TypeScript / Node.js (`.nvmrc`, `tsconfig.json`, `tsup.config.ts`), requires
-  Node >= 20.10; storage tests specifically need Node 20 because
-  `better-sqlite3`'s native binding fails on Node 24.
+  Node >= 22. CI verifies Node 22 and Node 24 LTS; `better-sqlite3` ^12 provides
+  native bindings for both.
 - Next.js web dashboard (`next.config.ts`, `app/`, `components/`, Tailwind
   via `tailwind.config.ts`, `postcss.config.mjs`).
 - Vitest for tests (`vitest.config.ts`).

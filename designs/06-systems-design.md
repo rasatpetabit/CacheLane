@@ -28,11 +28,11 @@
 
 | Layer | Choice | Version | Rationale |
 |-------|--------|---------|-----------|
-| Language / runtime | TypeScript, Node.js | ≥ 20.10 | Native fetch, stable test runner |
+| Language / runtime | TypeScript, Node.js | ≥ 22 | Supported LTS runtime floor; CI covers Node 22 and Node 24 |
 | MCP framework | `@modelcontextprotocol/sdk` | ^1.x (MIT) | Official MCP; Claude Code ≥ 0.6 required |
 | API client | `@anthropic-ai/sdk` | ^0.x (MIT) | First-party Anthropic client |
 | Tokenizer | `@anthropic-ai/tokenizer` | ^0.x | Resolves Opus 4.6 vs 4.7 differences |
-| Persistent storage | `better-sqlite3` | ^11.x | Synchronous SQLite in WAL mode; prebuilt binaries |
+| Persistent storage | `better-sqlite3` | ^12.x | Synchronous SQLite in WAL mode; Node 22/24 prebuilt binaries |
 | ID generation | `ulid` | ^2.x | Block IDs |
 | CLI | `commander` | ^12.x | CLI parsing |
 | Logging | `pino` + `pino-pretty` | ^9.x + ^11.x | Structured logging, daily rotation |
@@ -285,7 +285,7 @@ would have been without Cachelane installed."
 **Graceful shutdown:** SIGTERM → stop accepting hooks → finish in-flight → flush storage → exit
 within 2 seconds.
 
-**Self-diagnosis:** `cachelane doctor` checks Node ≥ 20.10, Claude Code ≥ 0.6, hook registration,
+**Self-diagnosis:** `cachelane doctor` checks Node ≥ 22, Claude Code ≥ 0.6, hook registration,
 MCP registration, SQLite writability, config parseability, recent cache-hit ratio (warns if < 0.2
 sustained over 50 turns — indicates prefix-instability bug).
 

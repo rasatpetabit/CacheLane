@@ -31,7 +31,7 @@ export default function GettingStartedPage() {
             <h2>Prerequisites</h2>
             <ul>
               <li>
-                <strong>Node.js:</strong> <InlineCode>v20.10.x</InlineCode> or later. Node 20 is strongly recommended as native SQLite bindings are optimized for Node 20.
+                <strong>Node.js:</strong> <InlineCode>v22.x</InlineCode> or later. CacheLane is continuously tested on Node 22 and Node 24 LTS.
               </li>
               <li>
                 <strong>Claude Code:</strong> <InlineCode>v0.6.x</InlineCode> or later.

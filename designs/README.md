@@ -32,7 +32,7 @@ only this folder should be able to begin implementation without consulting the r
 | [`05-token-reduction.md`](05-token-reduction.md) | Research findings, 5 methodologies evaluated, 10 ADRs, performance targets, validation plan | Token Reduction Research |
 | [`06-systems-design.md`](06-systems-design.md) | Tech stack, 8-module layout, SQLite schemas, per-turn overhead budgets, failure modes, milestones M1–M9 | Systems Design Document v2 |
 | [`07-open-questions.md`](07-open-questions.md) | Remaining open questions with owners and resolution status | Phase 2 Spec v2 + synthesis |
-| [`decisions/`](decisions/) | Individual ADR files (ADR-001 through ADR-010) | Token Reduction Research |
+| [`decisions/`](decisions/) | Individual architecture decision records (ADR-001 onward) | Research + implementation decisions |
 
 ---
 

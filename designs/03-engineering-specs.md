@@ -77,7 +77,7 @@
 
 | ID | Requirement | Target | Source |
 |----|-------------|--------|--------|
-| REQ-NF-001 | Runtime: Node.js | **≥ 20.10** (native fetch, stable test runner) | §1.3 |
+| REQ-NF-001 | Runtime: Node.js | **≥ 22**; CI compatibility on Node 22 and Node 24 LTS | ADR-013 (supersedes §1.3 runtime floor) |
 | REQ-NF-002 | Claude Code version | **≥ 0.6** (MCP server registration + PostResponse hooks) | §1.3 |
 | REQ-NF-003 | OS support | macOS, Linux, Windows (better-sqlite3 prebuilds) | §1.3 |
 | REQ-NF-004 | Installed disk footprint | **< 5 MB** | §1.3 |

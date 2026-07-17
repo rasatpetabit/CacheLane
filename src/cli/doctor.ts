@@ -20,11 +20,10 @@ export interface DoctorOptions {
   probe?: boolean;
 }
 
-function nodeVersionOk(version: string): boolean {
-  const [majorRaw, minorRaw] = version.replace(/^v/, "").split(".");
+export function isSupportedNodeVersion(version: string): boolean {
+  const [majorRaw] = version.replace(/^v/, "").split(".");
   const major = Number(majorRaw);
-  const minor = Number(minorRaw);
-  return major > 20 || (major === 20 && minor >= 10);
+  return Number.isInteger(major) && major >= 22;
 }
 
 export function runDoctor(env: NodeJS.ProcessEnv = process.env): DoctorReport {
@@ -34,7 +33,7 @@ export function runDoctor(env: NodeJS.ProcessEnv = process.env): DoctorReport {
 
   checks.push({
     name: "node",
-    ok: nodeVersionOk(process.version),
+    ok: isSupportedNodeVersion(process.version),
     detail: process.version,
   });
 

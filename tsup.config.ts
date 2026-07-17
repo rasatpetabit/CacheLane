@@ -8,7 +8,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   shims: true,
-  target: "node20",
+  target: "node22",
   async onSuccess() {
     const srcDir = path.join("src", "storage", "migrations");
     const destDir = path.join("dist", "migrations");

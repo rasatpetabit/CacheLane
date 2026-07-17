@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { runDoctor, probeUpstream, computeFallbackRate } from "../doctor.js";
+import {
+  runDoctor,
+  probeUpstream,
+  computeFallbackRate,
+  isSupportedNodeVersion,
+} from "../doctor.js";
 
 let tmpDir: string;
 let env: NodeJS.ProcessEnv;
@@ -21,6 +26,19 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("Node runtime compatibility", () => {
+  it.each([
+    ["v20.20.2", false],
+    ["v21.7.3", false],
+    ["v22.0.0", true],
+    ["v22.23.1", true],
+    ["v24.18.0", true],
+    ["invalid", false],
+  ])("treats %s support as %s", (version, expected) => {
+    expect(isSupportedNodeVersion(version)).toBe(expected);
+  });
 });
 
 describe("doctor upstream check", () => {

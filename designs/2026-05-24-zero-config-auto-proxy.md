@@ -866,7 +866,7 @@ When a maintainer can run the following and have it work end-to-end without inte
 
 ```bash
 # Clean machine, real-world dependencies
-$ docker run --rm -it node:20-bookworm bash
+$ docker run --rm -it node:22-bookworm bash
 # Inside container:
 $ npm install -g @anthropic-ai/claude-code   # Claude Code CLI
 $ npm install -g cachelane
@@ -880,7 +880,8 @@ $ cachelane explain --turn 1 --json | jq '.explanation.prefix_breakpoint_hash, .
 ```
 
 Three things in the Docker example matter:
-1. **`node:20-bookworm`** — Node 20 is required (`better-sqlite3` native binding fails on Node 24, per CLAUDE.md). Ubuntu's default `nodejs` package is too old. Don't substitute.
+1. **`node:22-bookworm`** — Node 22 is the minimum supported runtime. Node 24 LTS is
+   also covered in CI after the `better-sqlite3` v12 migration; see ADR-013.
 2. **Claude Code must be installed** — the litmus test exercises the full integration; without `@anthropic-ai/claude-code` on the PATH, there's nothing for `cachelane install` to register against.
 3. **Read `prefix_breakpoint_hash`, not `cache_read_input_tokens`** — see §5.8 and §6.
 

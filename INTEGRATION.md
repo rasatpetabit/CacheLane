@@ -9,9 +9,8 @@
 - Fork created at `/srv/dev/ai/cachelane` from upstream `813a0bd`.
 - Remote `upstream` → `https://github.com/Aditya-Tripuraneni/CacheLane.git` (no `origin` yet — add when we publish our own).
 - Branch: `headroom-litellm-integration`.
-- Baseline on Node 20.20.2 (`.nvmrc` = 20). CORRECTION 2026-07-16: Node
-  22.22.1 builds and tests cleanly (better-sqlite3 compiles) — the Node 20 pin
-  is obsolete.
+- Runtime baseline is Node 22 (`.nvmrc` = 22). Node 22.22.1 builds and tests
+  cleanly; CI also covers Node 24 LTS with `better-sqlite3` ^12.
   - `npm ci` ✅ (488 pkgs)
   - `npm run build` ✅
   - `npx tsc --noEmit` ✅
@@ -106,7 +105,8 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 
 ## 7. Risks / caveats
 
-- **Node 20 pin** — better-sqlite3 native bindings. Keep `.nvmrc`; CI/dev must use Node 20.
+- **Node runtime floor** — Node 22 minimum. Keep `.nvmrc`, package engines,
+  `cachelane doctor`, the tsup target, and the Node 22/24 CI matrix aligned.
 - **Cache-breakpoint value is Anthropic-bound** — see §1 reframe; don't over-promise savings on the open-model fleet.
 - **Byte-stability vs litellm translation** — if litellm mutates request bodies after CacheLane arranges them, `cache_control` placement drifts. Keep CacheLane as the **last** hop before the provider when breakpoints matter; accept no-op breakpoints when they don't (Phase 2).
 - **7 npm vulnerabilities (4 mod, 2 high, 1 crit)** in baseline deps — track but don't fix unrelated upstream issues yet.

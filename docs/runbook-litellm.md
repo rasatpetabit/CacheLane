@@ -49,7 +49,8 @@ node dist/cli/index.cjs proxy
 Config is re-read per request — flipping `mutation_enabled` does not require a restart.
 
 Build baseline: Node 22.22.1, `npm ci && npm run build && npm test` → 579 passed /
-2 skipped after Phase 2. The `.nvmrc` Node 20 pin is obsolete.
+2 skipped after Phase 2. `.nvmrc` and the build target now require Node 22;
+CI additionally covers Node 24 LTS.
 
 ## Phase 1a smoke results (2026-07-16)
 
@@ -230,10 +231,12 @@ Runtime lives under **`/srv/cachelane`** (not `/srv/dev`). Units:
 | `cachelane-claude.service` | `~/.cachelane` | **7333** | `api.anthropic.com:443` (Claude Code) |
 
 ```bash
-# rebuild + reinstall
-cd /srv/dev/ai/cachelane && npm run build
-rsync -a dist/ /srv/cachelane/dist/
-systemctl --user restart cachelane-litellm.service cachelane-claude.service
+# stage, install dependencies, build, and run native-module smoke checks only
+cd /srv/dev/ai/cachelane
+CACHELANE_DEPLOY_DRY_RUN=1 scripts/install-runtime.sh
+
+# production deploy: creates a timestamped runtime backup and restarts one lane at a time
+scripts/install-runtime.sh
 node /srv/cachelane/scripts/health-dual.mjs
 ```
 
@@ -406,4 +409,3 @@ restart CC/Pi. Proxies can stay up.
 
 **Note:** New Pi/CC sessions must load the env (restart). This session may still
 use pre-change process env until restart.
-

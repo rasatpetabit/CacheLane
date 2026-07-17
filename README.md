@@ -1,7 +1,7 @@
 # CacheLane
 
 [![Website](https://img.shields.io/badge/website-cache--lane.vercel.app-7c3aed.svg)](https://cache-lane.vercel.app/)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D20.10-blue.svg)](https://nodejs.org)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D22-blue.svg)](https://nodejs.org)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 > **A local cache-discipline layer for Claude Code.**
@@ -433,7 +433,9 @@ npm link        # exposes the `cachelane` command from your local build
 
 ### Tests & checks
 
-> **Node version:** use **Node 20**. `better-sqlite3`'s native bindings are precompiled for it, and newer majors may fail to load the binding.
+> **Node version:** Node **22 or newer** is required. Development and CI cover Node 22
+> and Node 24 LTS; the SQLite native dependency is pinned to a release line with
+> prebuilt bindings for both.
 
 ```bash
 npm test            # vitest run (full suite)
