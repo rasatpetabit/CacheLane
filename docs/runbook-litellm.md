@@ -17,10 +17,9 @@ Status (2026-07-17, epyc2):
 ## Topology
 
 ```
-Pi litellm/* (incl. default litellm/grok-4.5)  ──┐
-canary/curl                                     ──┼→ CacheLane 127.0.0.1:7332 → LiteLLM :4000 → provider
-                                                  │
-openai-codex/*  → (Responses API, bypasses CacheLane)
+Pi litellm/* (default grok-4.5)  → CacheLane :7332 → LiteLLM :4000 → providers
+Claude Code                      → CacheLane :7333 → api.anthropic.com (NOT LiteLLM)
+openai-codex/*                   → direct Responses API (Pi GPT backup; bypasses both)
 ```
 
 Shadow semantics: proxy still intercepts, classifies, ages tool blocks, and records
@@ -186,8 +185,11 @@ Coverage of enabledModels: **14/14 (100%)** through CacheLane.
 - **Default:** `litellm/grok-4.5`.
 - **Backup recovery path (bypasses CacheLane + LiteLLM):** `openai-codex/gpt-5.6-{sol,terra,luna}`
   remain in `enabledModels` for direct Responses API if the litellm/CacheLane path fails.
-- **Claude Code:** does **not** route through LiteLLM or CacheLane (no `ANTHROPIC_BASE_URL`
-  override). CC stays on its native Anthropic path (`claude-fable-5[1m]`).
+- **Claude Code:** uses CacheLane with **Anthropic upstream** (NOT LiteLLM):
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:7333` → `cachelane-anthropic.service`
+  (`CACHELANE_HOME=~/.cachelane`, upstream `api.anthropic.com:443`). Model stays
+  `claude-fable-5[1m]`. API key is the normal Anthropic key (never `noauth`).
+- **Pi litellm path** remains separate: `:7332` → LiteLLM (`cachelane-smoke`).
 - **Soak:** skipped per operator decision; `cachelane-soak-snapshot.timer` disabled.
 
 Backups: `models.json.bak-pre-all-litellm-*`, `settings.json.bak-pre-all-litellm-*`,
