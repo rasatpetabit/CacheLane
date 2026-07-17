@@ -37,4 +37,4 @@ if [[ -n "$CC_SETTINGS" ]]; then
 fi
 # Optional: stop pointing CC at cachelane if restored backup lacks BASE_URL
 echo "Rollback applied. Restart Pi/Claude Code sessions to pick up config."
-echo "Proxy units left running; stop with: systemctl --user stop cachelane-smoke cachelane-anthropic"
+echo "Proxy units left running; stop with: systemctl stop cachelane-openai cachelane-claude"

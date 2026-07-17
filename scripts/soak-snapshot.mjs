@@ -3,8 +3,8 @@
  * CacheLane soak snapshot — append one JSON line of aggregate metrics.
  *
  * Usage:
- *   CACHELANE_HOME=~/.cachelane-smoke node scripts/soak-snapshot.mjs
- *   CACHELANE_HOME=~/.cachelane-smoke node scripts/soak-snapshot.mjs --label day0-baseline
+ *   CACHELANE_HOME=~/.cachelane-openai node scripts/soak-snapshot.mjs
+ *   CACHELANE_HOME=~/.cachelane-openai node scripts/soak-snapshot.mjs --label day0-baseline
  *
  * Writes: $CACHELANE_HOME/soak/snapshots.jsonl
  * Prints: the same object to stdout (pretty).
@@ -14,7 +14,7 @@ import { appendFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const home = process.env.CACHELANE_HOME || join(homedir(), ".cachelane");
+const home = process.env.CACHELANE_HOME || join(homedir(), ".cachelane-claude");
 const labelArg = process.argv.indexOf("--label");
 const label = labelArg >= 0 ? process.argv[labelArg + 1] : null;
 const dbPath = join(home, "cachelane.db");

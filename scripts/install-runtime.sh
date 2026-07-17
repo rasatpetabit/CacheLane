@@ -1,70 +1,173 @@
 #!/usr/bin/env bash
-# Install CacheLane production runtime to /srv/cachelane and (re)start dual units.
+# Install CacheLane runtime into /srv/cachelane and (re)write hardened *system* units.
+# Units:
+#   cachelane-openai  :7332 → LiteLLM (OpenAI-compat; Pi / agent-dispatch / skynet)
+#   cachelane-claude  :7333 → api.anthropic.com (Claude Code)
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 INSTALL="${CACHELANE_INSTALL:-/srv/cachelane}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+UNIT_DIR=/etc/systemd/system
 
-echo "==> build from $ROOT"
-cd "$ROOT"
-npm run build
-
-echo "==> install to $INSTALL"
-mkdir -p "$INSTALL"
-rsync -a --delete \
-  --exclude '.git' --exclude 'src' --exclude 'node_modules' \
-  --exclude 'coverage' --exclude '*.log' \
-  "$ROOT/dist/" "$INSTALL/dist/"
-cp -a "$ROOT/package.json" "$ROOT/package-lock.json" "$INSTALL/"
-mkdir -p "$INSTALL/scripts"
-cp -a "$ROOT/scripts/health-dual.mjs" "$INSTALL/scripts/" 2>/dev/null || true
-if [[ ! -d "$INSTALL/node_modules" ]]; then
-  (cd "$INSTALL" && npm ci --omit=dev)
-else
-  # refresh if package-lock changed
-  (cd "$INSTALL" && npm ci --omit=dev)
+echo "Installing CacheLane from $REPO_ROOT → $INSTALL"
+sudo mkdir -p "$INSTALL"
+sudo rsync -a --delete \
+  --exclude '.git' --exclude 'node_modules' --exclude '.worktrees' \
+  "$REPO_ROOT/" "$INSTALL/"
+# Prefer already-built dist in repo; otherwise build
+if [[ ! -f "$INSTALL/dist/cli/index.cjs" ]]; then
+  (cd "$INSTALL" && npm ci && npm run build)
 fi
-git -C "$ROOT" rev-parse HEAD > "$INSTALL/GIT_SHA"
-date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL/INSTALLED_AT"
+git -C "$REPO_ROOT" rev-parse HEAD | sudo tee "$INSTALL/GIT_SHA" >/dev/null
+date -u +%Y-%m-%dT%H:%M:%SZ | sudo tee "$INSTALL/INSTALLED_AT" >/dev/null
 
-# Ensure dual user units point at install
-UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-mkdir -p "$UNIT_DIR"
-cat > "$UNIT_DIR/cachelane-smoke.service" <<UNIT
+# Home dirs (canonical names + back-compat symlinks)
+HOME_OPENAI="${CACHELANE_OPENAI_HOME:-$HOME/.cachelane-openai}"
+HOME_CLAUDE="${CACHELANE_CLAUDE_HOME:-$HOME/.cachelane-claude}"
+mkdir -p "$HOME_OPENAI" "$HOME_CLAUDE"
+# legacy names
+[[ -e "$HOME/.cachelane-smoke" ]] || ln -sfn "$(basename "$HOME_OPENAI")" "$HOME/.cachelane-smoke"
+if [[ -d "$HOME/.cachelane" && ! -L "$HOME/.cachelane" && "$HOME/.cachelane" -ef "$HOME_CLAUDE" ]]; then
+  : # already same
+elif [[ ! -e "$HOME/.cachelane" ]]; then
+  ln -sfn "$(basename "$HOME_CLAUDE")" "$HOME/.cachelane"
+fi
+
+sudo tee "$UNIT_DIR/cachelane-openai.service" >/dev/null <<UNIT
 [Unit]
-Description=CacheLane Pi/LiteLLM proxy (:7332 → LiteLLM)
-After=network-online.target
+Description=CacheLane OpenAI-compat proxy (:7332 → LiteLLM)
+Documentation=file:///srv/dev/ai/cachelane/docs/runbook-litellm.md
+After=network-online.target litellm.service litellm-gateway-proxy.service
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Environment=CACHELANE_HOME=%h/.cachelane-smoke
+User=$USER
+Group=$USER
+Environment=CACHELANE_HOME=$HOME_OPENAI
+Environment=HOME=$HOME
 WorkingDirectory=$INSTALL
 ExecStart=/usr/bin/node dist/cli/index.cjs proxy
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillMode=mixed
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$HOME_OPENAI $HOME/.cachelane-smoke
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+TasksMax=256
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 UNIT
-cat > "$UNIT_DIR/cachelane-anthropic.service" <<UNIT
+
+sudo tee "$UNIT_DIR/cachelane-claude.service" >/dev/null <<UNIT
 [Unit]
-Description=CacheLane Claude Code proxy (:7333 → api.anthropic.com, NOT LiteLLM)
+Description=CacheLane Claude/Anthropic proxy (:7333 → api.anthropic.com)
+Documentation=file:///srv/dev/ai/cachelane/docs/runbook-litellm.md
 After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Environment=CACHELANE_HOME=%h/.cachelane
+User=$USER
+Group=$USER
+Environment=CACHELANE_HOME=$HOME_CLAUDE
+Environment=HOME=$HOME
 WorkingDirectory=$INSTALL
 ExecStart=/usr/bin/node dist/cli/index.cjs proxy
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillMode=mixed
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$HOME_CLAUDE $HOME/.cachelane
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+TasksMax=256
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 UNIT
 
-systemctl --user daemon-reload
-systemctl --user enable --now cachelane-smoke.service cachelane-anthropic.service
-systemctl --user restart cachelane-smoke.service cachelane-anthropic.service
+# Healthcheck (idempotent)
+sudo tee /usr/local/sbin/cachelane-healthcheck >/dev/null <<'HEALTH'
+#!/usr/bin/env bash
+set -euo pipefail
+LOG_TAG=cachelane-healthcheck
+fail=0
+probe_tcp() { timeout 2 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+probe_openai() { curl -sf -m 3 -H 'Authorization: Bearer noauth' http://127.0.0.1:7332/v1/models >/dev/null; }
+probe_claude() {
+  local code
+  code=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' \
+    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -H 'x-api-key: invalid-probe-key' \
+    -d '{"model":"probe","max_tokens":1,"messages":[{"role":"user","content":"x"}]}' \
+    http://127.0.0.1:7333/v1/messages || true)
+  [[ -n "$code" && "$code" != "000" ]]
+}
+check_one() {
+  local name="$1" port="$2" probe_fn="$3"
+  if ! systemctl is-active --quiet "$name"; then
+    logger -t "$LOG_TAG" "WARN $name inactive; starting"
+    systemctl start "$name" || true; fail=$((fail+1)); return
+  fi
+  if ! probe_tcp "$port" || ! "$probe_fn"; then
+    logger -t "$LOG_TAG" "WARN $name port/probe failed; restarting"
+    systemctl restart "$name" || true; fail=$((fail+1)); return
+  fi
+}
+check_one cachelane-openai.service 7332 probe_openai
+check_one cachelane-claude.service 7333 probe_claude
+[[ "$fail" -eq 0 ]]
+HEALTH
+sudo chmod 755 /usr/local/sbin/cachelane-healthcheck
+
+sudo tee "$UNIT_DIR/cachelane-healthcheck.service" >/dev/null <<'UNIT'
+[Unit]
+Description=CacheLane dual-proxy healthcheck (restart on failure)
+After=cachelane-openai.service cachelane-claude.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cachelane-healthcheck
+UNIT
+
+sudo tee "$UNIT_DIR/cachelane-healthcheck.timer" >/dev/null <<'UNIT'
+[Unit]
+Description=Run CacheLane healthcheck every minute
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=cachelane-healthcheck.service
+[Install]
+WantedBy=timers.target
+UNIT
+
+# Disable legacy user units if present
+systemctl --user disable --now cachelane-smoke.service cachelane-anthropic.service 2>/dev/null || true
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now cachelane-openai.service cachelane-claude.service cachelane-healthcheck.timer
+sudo systemctl restart cachelane-openai.service cachelane-claude.service
 sleep 1
 node "$INSTALL/scripts/health-dual.mjs"
 echo "installed $(cat "$INSTALL/GIT_SHA") at $(cat "$INSTALL/INSTALLED_AT")"

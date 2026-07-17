@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Dual-path CacheLane health: Pi/LiteLLM :7332 + Claude Code/Anthropic :7333.
+ * Dual-path CacheLane health: OpenAI→LiteLLM :7332 + Claude→Anthropic :7333.
  * Exit 0 only if both listen and respond to a cheap probe shape.
  */
 import { createConnection } from "node:net";
 
 const checks = [
-  { name: "pi-litellm", host: "127.0.0.1", port: 7332, path: "/v1/models", auth: "Bearer noauth" },
-  { name: "cc-anthropic", host: "127.0.0.1", port: 7333, path: "/v1/messages", method: "POST" },
+  { name: "openai-litellm", host: "127.0.0.1", port: 7332, path: "/v1/models", auth: "Bearer noauth" },
+  { name: "claude-anthropic", host: "127.0.0.1", port: 7333, path: "/v1/messages", method: "POST" },
 ];
 
 function tcpOpen(host, port, ms = 1500) {

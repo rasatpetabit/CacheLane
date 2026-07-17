@@ -34,7 +34,7 @@ forwards the **original unmutated body** upstream.
 ## Setup (isolated smoke home)
 
 ```bash
-export CACHELANE_HOME=~/.cachelane-smoke
+export CACHELANE_HOME=~/.cachelane-openai
 # config.json deltas from defaults:
 #   proxy.upstream_host=192.168.109.71
 #   proxy.upstream_port=4000
@@ -74,7 +74,7 @@ Committed as `0b95a49` on `headroom-litellm-integration`:
 Script: `scripts/canary-shadow.mjs`
 
 ```bash
-export CACHELANE_HOME=~/.cachelane-smoke
+export CACHELANE_HOME=~/.cachelane-openai
 # ensure mutation_enabled=false in $CACHELANE_HOME/config.json
 node scripts/canary-shadow.mjs
 # → /tmp/cachelane-canary-shadow.json
@@ -114,7 +114,7 @@ Sticky multi-turn sessions use header `x-claude-code-session-id`.
 Config flip (no restart; per-request loadConfig):
 
 ```bash
-# ~/.cachelane-smoke/config.json
+# ~/.cachelane-openai/config.json
 "features": { "mutation_enabled": true, "k_pruner": true, "auto_proxy": false, "keepalive": true }
 ```
 
@@ -129,7 +129,7 @@ Decision-time reclaim on first prune fire: ~2874 (qwen) / ~2876 (grok).
 Streaming (qwen) + short grok still 200 under live mode.
 Artifact: `/tmp/cachelane-canary-live.json`.
 
-Rollback to shadow: set `mutation_enabled=false` in `~/.cachelane-smoke/config.json` (hot).
+Rollback to shadow: set `mutation_enabled=false` in `~/.cachelane-openai/config.json` (hot).
 
 
 ## Coverage audit (2026-07-17)
@@ -191,10 +191,10 @@ Coverage of enabledModels: **14/14 (100%)** through CacheLane.
 - **Backup recovery path (bypasses CacheLane + LiteLLM):** `openai-codex/gpt-5.6-{sol,terra,luna}`
   remain in `enabledModels` for direct Responses API if the litellm/CacheLane path fails.
 - **Claude Code:** uses CacheLane with **Anthropic upstream** (NOT LiteLLM):
-  `ANTHROPIC_BASE_URL=http://127.0.0.1:7333` → `cachelane-anthropic.service`
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:7333` → `cachelane-claude.service`
   (`CACHELANE_HOME=~/.cachelane`, upstream `api.anthropic.com:443`). Model stays
   `claude-fable-5[1m]`. API key is the normal Anthropic key (never `noauth`).
-- **Pi litellm path** remains separate: `:7332` → LiteLLM (`cachelane-smoke`).
+- **Pi litellm path** remains separate: `:7332` → LiteLLM (`cachelane-openai`).
 - **Soak:** skipped per operator decision; `cachelane-soak-snapshot.timer` disabled.
 
 Backups: `models.json.bak-pre-all-litellm-*`, `settings.json.bak-pre-all-litellm-*`,
@@ -204,14 +204,14 @@ Backups: `models.json.bak-pre-all-litellm-*`, `settings.json.bak-pre-all-litellm
 
 | Item | Value |
 |---|---|
-| Start marker | `~/.cachelane-smoke/soak/START` |
-| Snapshots | `~/.cachelane-smoke/soak/snapshots.jsonl` |
+| Start marker | `~/.cachelane-openai/soak/START` |
+| Snapshots | `~/.cachelane-openai/soak/snapshots.jsonl` |
 | Script | `scripts/soak-snapshot.mjs` |
 | Timer | `cachelane-soak-snapshot.timer` (every 6h, user unit) |
 | Day-0 baseline | 79 turns, 27 sessions, 13 prune-fire turns, ~39.5k tokens_reclaimed recorded |
 
 ```bash
-CACHELANE_HOME=~/.cachelane-smoke node scripts/soak-snapshot.mjs --label manual
+CACHELANE_HOME=~/.cachelane-openai node scripts/soak-snapshot.mjs --label manual
 systemctl --user list-timers | rg cachelane
 # rollback still: restore models.json.bak-pre-cachelane-20260717T043930Z
 ```
@@ -226,14 +226,14 @@ Runtime lives under **`/srv/cachelane`** (not `/srv/dev`). Units:
 
 | Unit | CACHELANE_HOME | Port | Upstream |
 |---|---|---|---|
-| `cachelane-smoke.service` | `~/.cachelane-smoke` | **7332** | LiteLLM `192.168.109.71:4000` (Pi) |
-| `cachelane-anthropic.service` | `~/.cachelane` | **7333** | `api.anthropic.com:443` (Claude Code) |
+| `cachelane-openai.service` | `~/.cachelane-openai` | **7332** | LiteLLM `192.168.109.71:4000` (Pi) |
+| `cachelane-claude.service` | `~/.cachelane` | **7333** | `api.anthropic.com:443` (Claude Code) |
 
 ```bash
 # rebuild + reinstall
 cd /srv/dev/ai/cachelane && npm run build
 rsync -a dist/ /srv/cachelane/dist/
-systemctl --user restart cachelane-smoke.service cachelane-anthropic.service
+systemctl --user restart cachelane-openai.service cachelane-claude.service
 node /srv/cachelane/scripts/health-dual.mjs
 ```
 
@@ -248,7 +248,7 @@ CLI note: `cachelane proxy` now reads `proxy.port` from config when `--port` is 
 - Health: `node /srv/cachelane/scripts/health-dual.mjs`
 - Client rollback drill (dry-run): `DRY_RUN=1 scripts/rollback-client-config.sh`
 - Client rollback apply: `DRY_RUN=0 scripts/rollback-client-config.sh`
-- Stop proxies: `systemctl --user stop cachelane-smoke cachelane-anthropic`
+- Stop proxies: `systemctl stop cachelane-openai cachelane-claude`
 - ~~Dispatch MCP path interception~~ — **done** (gateway-client + skynet via :7332).
 - Phase 4 packaging polish beyond `/srv/cachelane` — future, non-blocking.
 
@@ -281,7 +281,7 @@ Pi (litellm/* models) → CacheLane 127.0.0.1:7332 → LiteLLM 192.168.109.71:40
 Verify (disposable):
 ```bash
 # already ran: qwen36-27b + glm-5.2 via :7332 → 200, request_mutated=1
-CACHELANE_HOME=~/.cachelane-smoke node /srv/dev/ai/cachelane/dist/cli/index.cjs stats
+CACHELANE_HOME=~/.cachelane-openai node /srv/dev/ai/cachelane/dist/cli/index.cjs stats
 ```
 
 **Rollback (one line):**
@@ -293,12 +293,12 @@ python3 -c "import json,pathlib;p=pathlib.Path.home()/'.pi/agent/models.json';d=
 
 ## Ops notes
 
-- Proxy currently: `CACHELANE_HOME=~/.cachelane-smoke node dist/cli/index.cjs proxy`
+- Proxy currently: `CACHELANE_HOME=~/.cachelane-openai node dist/cli/index.cjs proxy`
   (nohup from Phase 2 verify; binds `127.0.0.1:7332` only).
 - Do **not** set `auto_proxy=true` or touch `~/.claude` / Pi baseUrl without an
   explicit go-ahead.
-- Stats: `CACHELANE_HOME=~/.cachelane-smoke node dist/cli/index.cjs stats`
-- Explain latest: `CACHELANE_HOME=~/.cachelane-smoke node dist/cli/index.cjs explain`
+- Stats: `CACHELANE_HOME=~/.cachelane-openai node dist/cli/index.cjs stats`
+- Explain latest: `CACHELANE_HOME=~/.cachelane-openai node dist/cli/index.cjs explain`
 
 ## Rollback drill (client config)
 
@@ -312,7 +312,7 @@ Backups written during rollout (pick latest):
 DRY_RUN=1 bash scripts/rollback-client-config.sh   # lists backups, no change
 DRY_RUN=0 bash scripts/rollback-client-config.sh   # restores client config
 # optional hard stop of proxies:
-systemctl --user stop cachelane-smoke.service cachelane-anthropic.service
+systemctl --user stop cachelane-openai.service cachelane-claude.service
 # Pi GPT backup path (openai-codex/*) never went through CacheLane — always available.
 ```
 
@@ -324,7 +324,7 @@ Two data homes (do not mix them):
 
 | Traffic | `CACHELANE_HOME` | Port | Upstream |
 |---|---|---|---|
-| Pi `litellm/*` | `~/.cachelane-smoke` | 7332 | LiteLLM |
+| Pi `litellm/*` | `~/.cachelane-openai` | 7332 | LiteLLM |
 | Claude Code | `~/.cachelane` | 7333 | api.anthropic.com |
 
 ### One-shot dual view
@@ -342,26 +342,26 @@ tail -5 ~/.cachelane-ops/stats-snapshots.jsonl
 ### CLI (pick a home)
 ```bash
 # Pi path (most traffic today)
-CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs stats --scope all
-CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs sessions
-CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs explain --top-blocks
-CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs doctor
+CACHELANE_HOME=~/.cachelane-openai node /srv/cachelane/dist/cli/index.cjs stats --scope all
+CACHELANE_HOME=~/.cachelane-openai node /srv/cachelane/dist/cli/index.cjs sessions
+CACHELANE_HOME=~/.cachelane-openai node /srv/cachelane/dist/cli/index.cjs explain --top-blocks
+CACHELANE_HOME=~/.cachelane-openai node /srv/cachelane/dist/cli/index.cjs doctor
 
 # Claude Code path
-CACHELANE_HOME=~/.cachelane node /srv/cachelane/dist/cli/index.cjs stats --scope all
+CACHELANE_HOME=~/.cachelane-claude node /srv/cachelane/dist/cli/index.cjs stats --scope all
 ```
 
 ### HTML dashboard
 ```bash
-CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs report --scope all --out ~/.cachelane-smoke/report.html
-# open ~/.cachelane-smoke/report.html in a browser
+CACHELANE_HOME=~/.cachelane-openai node /srv/cachelane/dist/cli/index.cjs report --scope all --out ~/.cachelane-openai/report.html
+# open ~/.cachelane-openai/report.html in a browser
 # CC: ~/.cachelane/report.html
 ```
 
 ### Inside Claude Code (MCP)
 After restarting CC so it reloads MCP:
 - Server **`cachelane`** → CC/Anthropic DB (`~/.cachelane`)
-- Server **`cachelane-pi`** → Pi/LiteLLM DB (`~/.cachelane-smoke`)
+- Server **`cachelane-pi`** → OpenAI→LiteLLM DB (`~/.cachelane-openai`)
 
 Tools: `cachelane_stats`, `cachelane_explain`, `cachelane_health`, `cachelane_expand`, `cachelane_retrieve_tool_output`.
 
@@ -377,7 +377,7 @@ Ask CC: "use cachelane-pi cachelane_stats with scope all" for Pi savings.
 - Health: `node /srv/cachelane/scripts/health-dual.mjs` both paths listen.
 
 ### Live numbers (2026-07-17)
-- Pi/LiteLLM: **97 turns, 30.2% cache hit, 45.4% savings, 39.5k tokens reclaimed**
+- OpenAI→LiteLLM: **97 turns, 30.2% cache hit, 45.4% savings, 39.5k tokens reclaimed**
 - Claude Code: probe-only so far (need real multi-turn CC sessions for savings)
 
 ## Dispatch MCP through CacheLane (2026-07-17)
@@ -397,7 +397,7 @@ Wired in:
 - `~/.bashrc` exports (Pi terminal sessions)
 
 **Verified:** gateway-client health ok; chat `model_group=qwen36-27b` → PONG; turn
-recorded in `~/.cachelane-smoke/cachelane.db` with `request_mutated=1`;
+recorded in `~/.cachelane-openai/cachelane.db` with `request_mutated=1`;
 `skynet-mcp.py --health` reports `base_url: http://127.0.0.1:7332/v1`.
 
 **Rollback:** remove the env vars / restore `settings.json` + `.claude.json` from

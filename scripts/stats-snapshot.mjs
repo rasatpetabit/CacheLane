@@ -25,8 +25,8 @@ function stats(home) {
 
 const row = {
   ts: new Date().toISOString(),
-  pi: stats(join(homedir(), ".cachelane-smoke")),
-  cc: stats(join(homedir(), ".cachelane")),
+  pi: stats(join(homedir(), ".cachelane-openai")),
+  cc: stats(join(homedir(), ".cachelane-claude")),
 };
 appendFileSync(outFile, JSON.stringify(row) + "\n");
 console.log(JSON.stringify({ wrote: outFile, pi_turns: row.pi.turns, cc_turns: row.cc.turns, pi_savings: row.pi.savings_ratio, cc_savings: row.cc.savings_ratio }));
