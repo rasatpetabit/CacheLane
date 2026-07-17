@@ -12,7 +12,7 @@ Status (2026-07-17, epyc2):
 | Live Pi `litellm.baseUrl` repoint | **DONE** 2026-07-17 — `http://127.0.0.1:7332/v1` |
 | Coverage audit | **DONE** — **14/14** enabledModels through CacheLane (GPT family + default grok) |
 | Default → litellm/grok-4.5 | **DONE** 2026-07-17 — new sessions hit CacheLane |
-| 7-day soak | **STARTED** 2026-07-17T04:41:23Z — timer every 6h |
+| 7-day soak | **SKIPPED** (operator) — timer disabled |
 
 ## Topology
 
@@ -178,7 +178,22 @@ and **enabled** as `litellm/*`. `openai-codex/*` removed from `enabledModels`
 Backups: `models.json.bak-pre-gpt-cachelane-*`, `settings.json.bak-pre-gpt-cachelane-*`.
 Coverage of enabledModels: **14/14 (100%)** through CacheLane.
 
-## 7-day soak (started 2026-07-17T04:41:23Z)
+
+### Full LiteLLM catalog on Pi via CacheLane (2026-07-17)
+
+- **All non-`dispatch-*` LiteLLM models** registered under `providers.litellm` and
+  enabled as `litellm/*` (26 models). Pi baseUrl stays `http://127.0.0.1:7332/v1`.
+- **Default:** `litellm/grok-4.5`.
+- **Backup recovery path (bypasses CacheLane + LiteLLM):** `openai-codex/gpt-5.6-{sol,terra,luna}`
+  remain in `enabledModels` for direct Responses API if the litellm/CacheLane path fails.
+- **Claude Code:** does **not** route through LiteLLM or CacheLane (no `ANTHROPIC_BASE_URL`
+  override). CC stays on its native Anthropic path (`claude-fable-5[1m]`).
+- **Soak:** skipped per operator decision; `cachelane-soak-snapshot.timer` disabled.
+
+Backups: `models.json.bak-pre-all-litellm-*`, `settings.json.bak-pre-all-litellm-*`,
+`~/.claude/settings.json.bak-pre-cachelane-*` (CC restore source).
+
+## 7-day soak (SKIPPED) (started 2026-07-17T04:41:23Z)
 
 | Item | Value |
 |---|---|

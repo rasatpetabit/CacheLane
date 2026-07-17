@@ -111,3 +111,4 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 - **Byte-stability vs litellm translation** — if litellm mutates request bodies after CacheLane arranges them, `cache_control` placement drifts. Keep CacheLane as the **last** hop before the provider when breakpoints matter; accept no-op breakpoints when they don't (Phase 2).
 - **7 npm vulnerabilities (4 mod, 2 high, 1 crit)** in baseline deps — track but don't fix unrelated upstream issues yet.
 - 2026-07-17: migration `012_session_scoped_blocks` — blocks PK is `(session_id, id)`; insert UPSERT preserves is_stub on same content_hash. Applied on smoke DB.
+- 2026-07-17: all non-dispatch LiteLLM models enabled on Pi via CacheLane; openai-codex kept as backup; Claude Code does NOT use LiteLLM/CacheLane; soak skipped.
