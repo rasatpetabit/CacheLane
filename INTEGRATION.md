@@ -25,6 +25,8 @@
   and `openai-codex/*` still bypass CacheLane. Details: `docs/runbook-litellm.md`.
 - 2026-07-17: coverage audit 7/11 enabledModels through CacheLane; 7-day soak
   started (`soak/START`, `cachelane-soak-snapshot.timer` every 6h).
+- 2026-07-17: **default flipped** to `litellm/grok-4.5` (was `xai-auth/grok-4.5`).
+  Coverage 9/11 enabledModels through CacheLane; openai-codex/* still bypasses.
 
 ## 1. What CacheLane actually does (mechanism split)
 
