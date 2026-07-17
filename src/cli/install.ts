@@ -346,16 +346,23 @@ export function installCachelane(env: NodeJS.ProcessEnv = process.env): InstallR
     env: { CACHELANE_HOME: cachelaneHome(env) },
   };
   // Dual-home: primary server follows install CACHELANE_HOME (Claude Code → Anthropic).
-  // Optional Pi/LiteLLM stats server when the smoke home exists on this host.
+  // Optional Pi/LiteLLM stats server when the smoke home exists for this env.
+  // Resolve under env.HOME (tests isolate HOME) or CACHELANE_PI_HOME override — never
+  // consult the real process homedir alone, or host dual-topology leaks into fixtures.
   const beforeMcp = stable(mcpConfig);
   servers.cachelane = nextServer;
-  const piHome = path.join(homedir(), ".cachelane-smoke");
+  const piHome =
+    env.CACHELANE_PI_HOME?.trim() ||
+    path.join(env.HOME ?? homedir(), ".cachelane-smoke");
   if (fs.existsSync(piHome)) {
     servers["cachelane-pi"] = {
       command: nodeExec,
       args: [cliScript, "mcp"],
       env: { CACHELANE_HOME: piHome },
     };
+  } else if ("cachelane-pi" in servers) {
+    // Smoke home gone — drop the optional server so install stays idempotent.
+    delete servers["cachelane-pi"];
   }
   mcpConfig.mcpServers = servers;
   const afterMcp = stable(mcpConfig);
@@ -409,10 +416,20 @@ export function uninstallCachelane(
 
   if (fs.existsSync(mcpPath)) {
     const mcpConfig = readJsonObject(mcpPath);
-    if (isObject(mcpConfig.mcpServers) && "cachelane" in mcpConfig.mcpServers) {
-      delete mcpConfig.mcpServers.cachelane;
-      writeJsonObject(mcpPath, mcpConfig);
-      changed = true;
+    if (isObject(mcpConfig.mcpServers)) {
+      let mcpChanged = false;
+      if ("cachelane" in mcpConfig.mcpServers) {
+        delete mcpConfig.mcpServers.cachelane;
+        mcpChanged = true;
+      }
+      if ("cachelane-pi" in mcpConfig.mcpServers) {
+        delete (mcpConfig.mcpServers as JsonObject)["cachelane-pi"];
+        mcpChanged = true;
+      }
+      if (mcpChanged) {
+        writeJsonObject(mcpPath, mcpConfig);
+        changed = true;
+      }
     }
   }
 

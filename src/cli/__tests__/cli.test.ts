@@ -122,11 +122,14 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cachelane-cli-"));
   env = {
     ...process.env,
+    // Isolate dual-home detection (install looks for $HOME/.cachelane-smoke).
+    HOME: tmpDir,
     CACHELANE_HOME: path.join(tmpDir, "cachelane"),
     CLAUDE_HOME: path.join(tmpDir, "claude"),
     CACHELANE_WORKSPACE_ID: "ws-1",
     CACHELANE_SESSION_ID: "sess-1",
   };
+  delete env.CACHELANE_PI_HOME;
 });
 
 afterEach(() => {
@@ -512,6 +515,30 @@ describe("cachelane CLI", () => {
     expect(first.changed).toBe(true);
     expect(second.changed).toBe(false);
     expect(Object.keys(mcp.mcpServers).sort()).toEqual(["cachelane", "other"]);
+  });
+
+  it("install registers optional cachelane-pi when smoke home exists", async () => {
+    fs.mkdirSync(env.CLAUDE_HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(env.CLAUDE_HOME!, "mcp.json"),
+      JSON.stringify({ mcpServers: { other: { command: "other" } } }, null, 2),
+    );
+    const smokeHome = path.join(tmpDir, ".cachelane-smoke");
+    fs.mkdirSync(smokeHome, { recursive: true });
+
+    await run(["install"]);
+    const mcp = JSON.parse(
+      fs.readFileSync(path.join(env.CLAUDE_HOME!, "mcp.json"), "utf-8"),
+    ) as {
+      mcpServers: Record<string, { env?: { CACHELANE_HOME?: string } }>;
+    };
+
+    expect(Object.keys(mcp.mcpServers).sort()).toEqual([
+      "cachelane",
+      "cachelane-pi",
+      "other",
+    ]);
+    expect(mcp.mcpServers["cachelane-pi"]?.env?.CACHELANE_HOME).toBe(smokeHome);
   });
 
   it("install reports malformed Claude MCP config without overwriting it", async () => {
