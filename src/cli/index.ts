@@ -747,16 +747,27 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
   program
     .command("proxy")
     .description("Start HTTP proxy that intercepts Anthropic API calls and runs the CacheLane pipeline")
-    .option("--port <number>", "Port to listen on (default: 7332)", (v) => parseInt(v, 10), 7332)
+    // No default on --port: if omitted, honor config.json proxy.port (was always 7332
+    // and silently overrode CACHELANE_HOME config — broke dual-instance deploys).
+    .option("--port <number>", "Port to listen on (default: config proxy.port, else 7332)", (v) => parseInt(v, 10))
     .option("--db <path>", "SQLite database path")
     .option("--config <path>", "CacheLane config path")
     .option("--workspace-id <id>", "Workspace scope")
     .option("--session-id <id>", "Session scope (default: auto-generated UUID)")
-    .action((cmd: { port: number; db?: string; config?: string; workspaceId?: string; sessionId?: string }) => {
+    .action((cmd: { port?: number; db?: string; config?: string; workspaceId?: string; sessionId?: string }) => {
+      const configPath = cmd.config ?? cachelaneConfigPath(env);
+      let port = cmd.port;
+      if (port === undefined) {
+        try {
+          port = loadConfig(configPath).proxy.port;
+        } catch {
+          port = 7332;
+        }
+      }
       startProxy({
-        port: cmd.port,
+        port,
         db_path: cmd.db ?? cachelaneDbPath(env),
-        config_path: cmd.config ?? cachelaneConfigPath(env),
+        config_path: configPath,
         workspace_id: cmd.workspaceId,
         session_id: cmd.sessionId,
       });

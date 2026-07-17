@@ -13,6 +13,8 @@ Status (2026-07-17, epyc2):
 | Coverage audit | **DONE** — **14/14** enabledModels through CacheLane (GPT family + default grok) |
 | Default → litellm/grok-4.5 | **DONE** 2026-07-17 — new sessions hit CacheLane |
 | 7-day soak | **SKIPPED** (operator) — timer disabled |
+| Production install | **DONE** `/srv/cachelane` + dual user units |
+| Dual health | `scripts/health-dual.mjs` |
 
 ## Topology
 
@@ -214,14 +216,36 @@ systemctl --user list-timers | rg cachelane
 Watch for: error rate, prune_fire_turns growth, baseline_turns (should stay ~0 on new live traffic),
 `blocks.id` collisions across sessions, agent completion failures on long tool-heavy chats.
 
+
+## Production install (2026-07-17)
+
+Runtime lives under **`/srv/cachelane`** (not `/srv/dev`). Units:
+
+| Unit | CACHELANE_HOME | Port | Upstream |
+|---|---|---|---|
+| `cachelane-smoke.service` | `~/.cachelane-smoke` | **7332** | LiteLLM `192.168.109.71:4000` (Pi) |
+| `cachelane-anthropic.service` | `~/.cachelane` | **7333** | `api.anthropic.com:443` (Claude Code) |
+
+```bash
+# rebuild + reinstall
+cd /srv/dev/ai/cachelane && npm run build
+rsync -a dist/ /srv/cachelane/dist/
+systemctl --user restart cachelane-smoke.service cachelane-anthropic.service
+node /srv/cachelane/scripts/health-dual.mjs
+```
+
+CLI note: `cachelane proxy` now reads `proxy.port` from config when `--port` is omitted
+(previously hard-defaulted to 7332 and broke dual-home deploys).
+
 ## Next gates (do NOT skip)
 
-1. ~~Shadow / live pruning / Pi repoint / default grok flip~~ — **done**.
-2. **Complete 7-day soak** — review `soak/snapshots.jsonl`; rollback drill once.
-3. ~~Schema follow-ups~~ — **done** (`012_session_scoped_blocks`: PK `(session_id,id)`;
-   UPSERT preserves `is_stub` when content_hash unchanged).
-4. **Complete 7-day soak** + rollback drill.
-5. Optional Pi core: make `flushCompactionQueue` streaming-safe (`ALLOW_PI_MODIFICATION`).
+1. ~~Shadow / live pruning / Pi repoint / full litellm catalog / dual CC path~~ — **done**.
+2. ~~Schema 012 / CLI config port / `/srv/cachelane` install~~ — **done**.
+3. ~~Soak~~ — **skipped** (operator).
+4. **CC live auth** — confirm Claude Code session with a valid Anthropic credential
+   through `:7333` (probe shows Anthropic 401 with bad key; path is correct).
+5. Optional: Pi core `flushCompactionQueue` streaming-safe (`ALLOW_PI_MODIFICATION`).
+6. Optional: `cachelane install` MCP registration for Claude Code (stats tools).
 
 
 ## Pi litellm baseUrl repoint (2026-07-17)
