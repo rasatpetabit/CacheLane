@@ -80,7 +80,7 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 - **Phase 1b — Decide the live-traffic seam (BLOCKER, user-owned).**
   The current dispatch path is **Pi → skynet MCP (`skynet_chat`) → litellm**, an in-process MCP call — NOT an HTTP call CacheLane can intercept by sitting on a base URL. So CacheLane can't just "sit in front" of the existing path. Three ways in:
   - **(a) New HTTP clients only** — Claude Code / a new Pi HTTP model adapter points at CacheLane → litellm. skynet MCP fleet unchanged. Lowest blast radius; CacheLane manages opt-in traffic.
-  - **(b) Repoint skynet-mcp.py** to call litellm over HTTP through CacheLane instead of directly. All fleet traffic flows through CacheLane. Highest coverage, touches the dispatch primitive the user owns.
+  - **(b) Repoint skynet-mcp.py** to call litellm over HTTP through CacheLane instead of directly. All fleet traffic flows through CacheLane. Highest coverage, touches the dispatch primitive the user owns. **DONE 2026-07-17** via `SKYNET_BASE_URL` + `AGENT_DISPATCH_GATEWAY_URL` → `:7332` (gateway-client in-process path included).
   - **(c) CacheLane as a parallel anthropic-format tier** for specific model classes only (e.g., the OpenAI/gpt routes that benefit from pruning), skynet stays direct for the qwen/glm fleet.
   This is an architecture decision for the dispatch owner — do **not** repoint skynet without explicit sign-off.
 - **Phase 2 — Make the orchestrator provider-aware ("more than Claude").**
@@ -118,3 +118,4 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 - 2026-07-17: rollout COMPLETE — install-runtime.sh, rollback-client-config.sh, linger enabled, health-dual green; soak skipped.
 - 2026-07-17: MCP dual servers (cachelane + cachelane-pi); hooks drop deprecated hook-mutate; stats-dual.mjs + HTML reports; flushCompactionQueue already streaming-safe.
 - 2026-07-17: install registers cachelane-pi MCP when ~/.cachelane-smoke exists; daily stats-snapshot.timer → ~/.cachelane-ops/stats-snapshots.jsonl.
+- 2026-07-17: dispatch MCP fixed — AGENT_DISPATCH_GATEWAY_URL + SKYNET_BASE_URL → CacheLane :7332; gateway-client chat + skynet --health verified; turns in smoke DB.

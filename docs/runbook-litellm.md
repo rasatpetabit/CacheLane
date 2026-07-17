@@ -20,7 +20,9 @@ Status (2026-07-17, epyc2):
 ## Topology
 
 ```
-Pi litellm/* (default grok-4.5)  → CacheLane :7332 → LiteLLM :4000 → providers
+Pi litellm/* (default grok-4.5)  → CacheLane :7332 → LiteLLM → providers
+Dispatch / agent-dispatch gateway-client → CacheLane :7332 → LiteLLM  (via AGENT_DISPATCH_GATEWAY_URL)
+skynet MCP (when still spawned)  → CacheLane :7332/v1 → LiteLLM     (via SKYNET_BASE_URL)
 Claude Code                      → CacheLane :7333 → api.anthropic.com (NOT LiteLLM)
 openai-codex/*                   → direct Responses API (Pi GPT backup; bypasses both)
 ```
@@ -247,7 +249,8 @@ CLI note: `cachelane proxy` now reads `proxy.port` from config when `--port` is 
 - Client rollback drill (dry-run): `DRY_RUN=1 scripts/rollback-client-config.sh`
 - Client rollback apply: `DRY_RUN=0 scripts/rollback-client-config.sh`
 - Stop proxies: `systemctl --user stop cachelane-smoke cachelane-anthropic`
-- Phase 4 packaging polish / dispatch MCP path interception — future work, not blocking.
+- ~~Dispatch MCP path interception~~ — **done** (gateway-client + skynet via :7332).
+- Phase 4 packaging polish beyond `/srv/cachelane` — future, non-blocking.
 
 
 ## Pi litellm baseUrl repoint (2026-07-17)
@@ -376,4 +379,31 @@ Ask CC: "use cachelane-pi cachelane_stats with scope all" for Pi savings.
 ### Live numbers (2026-07-17)
 - Pi/LiteLLM: **97 turns, 30.2% cache hit, 45.4% savings, 39.5k tokens reclaimed**
 - Claude Code: probe-only so far (need real multi-turn CC sessions for savings)
+
+## Dispatch MCP through CacheLane (2026-07-17)
+
+**Path:** agent-dispatch `gateway-client.mjs` and skynet-mcp HTTP both use CacheLane
+smoke on `:7332` instead of talking to LiteLLM directly.
+
+| Client | Env | Value |
+|---|---|---|
+| agent-dispatch gateway-client | `AGENT_DISPATCH_GATEWAY_URL` / `AGENT_DISPATCH_LITELLM_URL` | `http://127.0.0.1:7332` |
+| skynet-mcp | `SKYNET_BASE_URL` / `SKYNET_QWEN_BASE_URL` | `http://127.0.0.1:7332/v1` |
+
+Wired in:
+- `~/.config/environment.d/50-cachelane-dispatch.conf`
+- `~/.claude/settings.json` `env`
+- `~/.claude.json` MCP servers `skynet` + `agent-dispatch`
+- `~/.bashrc` exports (Pi terminal sessions)
+
+**Verified:** gateway-client health ok; chat `model_group=qwen36-27b` → PONG; turn
+recorded in `~/.cachelane-smoke/cachelane.db` with `request_mutated=1`;
+`skynet-mcp.py --health` reports `base_url: http://127.0.0.1:7332/v1`.
+
+**Rollback:** remove the env vars / restore `settings.json` + `.claude.json` from
+`bak-pre-dispatch-cachelane-*`, delete `environment.d/50-cachelane-dispatch.conf`,
+restart CC/Pi. Proxies can stay up.
+
+**Note:** New Pi/CC sessions must load the env (restart). This session may still
+use pre-change process env until restart.
 
