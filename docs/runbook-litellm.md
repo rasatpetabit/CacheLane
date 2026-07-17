@@ -14,6 +14,7 @@ Status (2026-07-17, epyc2):
 | Default → litellm/grok-4.5 | **DONE** 2026-07-17 — new sessions hit CacheLane |
 | 7-day soak | **SKIPPED** (operator) — timer disabled |
 | Production install | **DONE** `/srv/cachelane` + dual user units |
+| Rollout status | **COMPLETE** 2026-07-17 (soak skipped by operator) |
 | Dual health | `scripts/health-dual.mjs` |
 
 ## Topology
@@ -237,18 +238,16 @@ node /srv/cachelane/scripts/health-dual.mjs
 CLI note: `cachelane proxy` now reads `proxy.port` from config when `--port` is omitted
 (previously hard-defaulted to 7332 and broke dual-home deploys).
 
-## Next gates (do NOT skip)
+## Next gates
 
-1. ~~Shadow / live pruning / Pi repoint / full litellm catalog / dual CC path~~ — **done**.
-2. ~~Schema 012 / CLI config port / `/srv/cachelane` install~~ — **done**.
-3. ~~Soak~~ — **skipped** (operator).
-4. ~~**CC live auth**~~ — **done**. Claude Max OAuth (`claudeAiOauth` Bearer) through
-   `:7333` returns PONG; turns recorded in `~/.cachelane/cachelane.db`.
-   (Shell `ANTHROPIC_API_KEY` is stale/invalid — CC uses OAuth, not that key.)
-5. ~~**cachelane install** for CC~~ — **done**. MCP + hooks registered; doctor green;
-   `CACHELANE_HOME=~/.cachelane`, base URL still `:7333` → Anthropic (not LiteLLM).
-6. ~~**Pi core flushCompactionQueue streaming-safe**~~ — **done** (user authorized "do all 3").
-   Patched installed package + `/srv/dev/ai/pi-fork` dist; bare-prompt avoided when busy.
+**All rollout gates closed** (2026-07-17). Remaining is routine ops only:
+
+- Reinstall/update runtime: `scripts/install-runtime.sh`
+- Health: `node /srv/cachelane/scripts/health-dual.mjs`
+- Client rollback drill (dry-run): `DRY_RUN=1 scripts/rollback-client-config.sh`
+- Client rollback apply: `DRY_RUN=0 scripts/rollback-client-config.sh`
+- Stop proxies: `systemctl --user stop cachelane-smoke cachelane-anthropic`
+- Phase 4 packaging polish / dispatch MCP path interception — future work, not blocking.
 
 
 ## Pi litellm baseUrl repoint (2026-07-17)
@@ -297,3 +296,22 @@ python3 -c "import json,pathlib;p=pathlib.Path.home()/'.pi/agent/models.json';d=
   explicit go-ahead.
 - Stats: `CACHELANE_HOME=~/.cachelane-smoke node dist/cli/index.cjs stats`
 - Explain latest: `CACHELANE_HOME=~/.cachelane-smoke node dist/cli/index.cjs explain`
+
+## Rollback drill (client config)
+
+Backups written during rollout (pick latest):
+
+- `~/.pi/agent/models.json.bak-pre-cachelane-*`
+- `~/.pi/agent/settings.json.bak-pre-*`
+- `~/.claude/settings.json.bak-pre-cachelane-*` / `bak-pre-cc-cachelane-*`
+
+```bash
+DRY_RUN=1 bash scripts/rollback-client-config.sh   # lists backups, no change
+DRY_RUN=0 bash scripts/rollback-client-config.sh   # restores client config
+# optional hard stop of proxies:
+systemctl --user stop cachelane-smoke.service cachelane-anthropic.service
+# Pi GPT backup path (openai-codex/*) never went through CacheLane — always available.
+```
+
+Dry-run verified 2026-07-17 (backups present).
+
