@@ -27,6 +27,7 @@
   started (`soak/START`, `cachelane-soak-snapshot.timer` every 6h).
 - 2026-07-17: **default flipped** to `litellm/grok-4.5` (was `xai-auth/grok-4.5`).
   Coverage 9/11 enabledModels through CacheLane; openai-codex/* still bypasses.
+- 2026-07-17: all LiteLLM GPT models enabled as litellm/* through CacheLane; openai-codex/* dropped from enabledModels; gpt-5.5/pro added. Coverage 14/14.
 
 ## 1. What CacheLane actually does (mechanism split)
 

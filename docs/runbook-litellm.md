@@ -10,7 +10,7 @@ Status (2026-07-17, epyc2):
 | Canaries (option 3, shadow) | **PASSED** 2026-07-17 — grok-4.5 / streaming / long context / multi-turn prune estimates |
 | Live pruning (`mutation_enabled=true`) | **ON + canary-verified** 2026-07-17 on smoke instance |
 | Live Pi `litellm.baseUrl` repoint | **DONE** 2026-07-17 — `http://127.0.0.1:7332/v1` |
-| Coverage audit | **DONE** 2026-07-17 — was 7/11; now **9/11** after default flip |
+| Coverage audit | **DONE** — **14/14** enabledModels through CacheLane (GPT family + default grok) |
 | Default → litellm/grok-4.5 | **DONE** 2026-07-17 — new sessions hit CacheLane |
 | 7-day soak | **STARTED** 2026-07-17T04:41:23Z — timer every 6h |
 
@@ -159,6 +159,24 @@ Verified: `POST :7332` model=grok-4.5 → 200, CacheLane turn `request_mutated=1
 Still bypass: `openai-codex/*` only (Responses API).
 
 **This session** may still be on old default until restart; **new** Pi sessions use litellm/grok-4.5.
+
+
+### GPT models on litellm → CacheLane (2026-07-17)
+
+All LiteLLM GPT catalog models are now under `providers.litellm` (baseUrl :7332)
+and **enabled** as `litellm/*`. `openai-codex/*` removed from `enabledModels`
+(provider entry kept for optional manual use; Responses API still bypasses CacheLane).
+
+| Model | enabled | smoke via :7332 |
+|---|---|---|
+| grok-4.5 (default) | litellm/grok-4.5 | 200 (prior) |
+| gpt-5.6 / sol / terra / luna | litellm/* | luna 200 |
+| gpt-5.5 / gpt-5.5-pro | litellm/* (added) | gpt-5.5 200 |
+| gpt-5.4-mini | litellm/* | 200 |
+| gpt-5.3-codex-spark | litellm/* | (catalog) |
+
+Backups: `models.json.bak-pre-gpt-cachelane-*`, `settings.json.bak-pre-gpt-cachelane-*`.
+Coverage of enabledModels: **14/14 (100%)** through CacheLane.
 
 ## 7-day soak (started 2026-07-17T04:41:23Z)
 
