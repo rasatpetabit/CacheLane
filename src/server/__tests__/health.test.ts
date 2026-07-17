@@ -18,7 +18,11 @@ function context(): CachelaneMcpContext {
   };
 }
 
-function insertExplanation(turnNumber: number, mutated: boolean) {
+function insertExplanation(
+  turnNumber: number,
+  mutated: boolean,
+  signals: string[] = [],
+) {
   const now = 1_715_000_000_000 + turnNumber;
   db.insertTurnExplanation({
     turn_id: `turn-${turnNumber}`,
@@ -38,7 +42,7 @@ function insertExplanation(turnNumber: number, mutated: boolean) {
       semi_count: 0,
       volatile_count: 1,
     },
-    signals: [],
+    signals,
     created_at: now,
     updated_at: now,
   });
@@ -83,7 +87,7 @@ describe("Health tool handler", () => {
     for (let i = 1; i <= 19; i++) {
       insertExplanation(i, true);
     }
-    insertExplanation(20, false);
+    insertExplanation(20, false, ["error:fallback"]);
     const status = handleHealthTool(context(), {});
     expect(status).toMatchObject({
       status: "ok",
@@ -96,8 +100,8 @@ describe("Health tool handler", () => {
     for (let i = 1; i <= 18; i++) {
       insertExplanation(i, true);
     }
-    insertExplanation(19, false);
-    insertExplanation(20, false);
+    insertExplanation(19, false, ["error:fallback"]);
+    insertExplanation(20, false, ["error:fallback"]);
     const status = handleHealthTool(context(), {});
     expect(status).toMatchObject({
       status: "degraded",
@@ -110,7 +114,7 @@ describe("Health tool handler", () => {
     for (let i = 1; i <= 9; i++) {
       insertExplanation(i, true);
     }
-    insertExplanation(10, false);
+    insertExplanation(10, false, ["error:fallback"]);
     const status = handleHealthTool(context(), {});
     expect(status).toMatchObject({
       status: "degraded",
@@ -121,7 +125,7 @@ describe("Health tool handler", () => {
   it("only considers the last 20 turns", () => {
     // 10 fallbacks, but they are all in the past.
     for (let i = 1; i <= 10; i++) {
-      insertExplanation(i, false);
+      insertExplanation(i, false, ["error:fallback"]);
     }
     // Then 20 successful ones.
     for (let i = 11; i <= 30; i++) {
@@ -131,6 +135,16 @@ describe("Health tool handler", () => {
     expect(status).toMatchObject({
       status: "ok",
       explanation: "0 of the last 20 workspace turns used fallback mode.",
+    });
+  });
+
+  it("does not count intentional baseline or no-op turns as fallback", () => {
+    insertExplanation(1, false, ["mode:baseline"]);
+    insertExplanation(2, false, ["prefix_cached"]);
+    const status = handleHealthTool(context(), {});
+    expect(status).toMatchObject({
+      status: "ok",
+      explanation: "0 of the last 2 workspace turns used fallback mode.",
     });
   });
 });

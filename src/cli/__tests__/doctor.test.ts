@@ -52,13 +52,16 @@ describe("probeUpstream", () => {
 });
 
 describe("computeFallbackRate", () => {
-  it("matches health.ts threshold semantics", () => {
+  it("counts only explicit fail-open signals", () => {
     const explanations = [
-      { mutated: true }, { mutated: true }, { mutated: false },
-    ] as { mutated: boolean }[];
+      { mutated: true, signals: ["prefix_cached"] },
+      { mutated: false, signals: ["mode:baseline"] },
+      { mutated: false, signals: ["prefix_cached"] },
+      { mutated: true, signals: ["error:fallback"] },
+    ];
     const { fallback_count, total, fraction } = computeFallbackRate(explanations);
     expect(fallback_count).toBe(1);
-    expect(total).toBe(3);
-    expect(fraction).toBeCloseTo(1 / 3, 5);
+    expect(total).toBe(4);
+    expect(fraction).toBeCloseTo(1 / 4, 5);
   });
 });

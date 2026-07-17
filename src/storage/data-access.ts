@@ -46,6 +46,107 @@ function parseJson<T>(value: string, fallback: T): T {
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseStringArray(value: string | null): string[] {
+  if (value === null) return [];
+  const parsed = parseJson<unknown>(value, null);
+  return Array.isArray(parsed) && parsed.every((item) => typeof item === "string")
+    ? parsed
+    : [];
+}
+
+function parsePruneDecisions(value: string | null): TurnExplanationPruneDecision[] {
+  if (value === null) return [];
+  const parsed = parseJson<unknown>(value, null);
+  if (!Array.isArray(parsed)) return [];
+  const blockKinds = new Set([
+    "system_prompt",
+    "tool_schema",
+    "claude_md",
+    "project_rules",
+    "prior_turn",
+    "tool_use_result_pair",
+    "file_read",
+    "retrieval_result",
+    "tool_output",
+    "user_message",
+    "stub",
+  ]);
+  const valid = parsed.every(
+    (item) =>
+      isObject(item) &&
+      typeof item.block_id === "string" &&
+      typeof item.action === "string" &&
+      typeof item.reason === "string" &&
+      typeof item.kind === "string" &&
+      blockKinds.has(item.kind) &&
+      (typeof item.stub_summary === "string" ||
+        item.stub_summary === null) &&
+      typeof item.has_refetch_handle === "boolean" &&
+      (item.tokens_reclaimed === undefined ||
+        (typeof item.tokens_reclaimed === "number" &&
+          Number.isFinite(item.tokens_reclaimed))),
+  );
+  return valid ? (parsed as TurnExplanationPruneDecision[]) : [];
+}
+
+function zeroRegionMetadata(): TurnExplanationRegionMetadata {
+  return {
+    message_count: 0,
+    stable_count: 0,
+    semi_count: 0,
+    volatile_count: 0,
+  };
+}
+
+function parseRegionMetadata(value: string | null): TurnExplanationRegionMetadata {
+  if (value === null) return zeroRegionMetadata();
+  const parsed = parseJson<unknown>(value, null);
+  if (!isObject(parsed)) return zeroRegionMetadata();
+  const keys = [
+    "message_count",
+    "stable_count",
+    "semi_count",
+    "volatile_count",
+  ] as const;
+  if (
+    !keys.every(
+      (key) => {
+        const count = parsed[key];
+        return (
+          typeof count === "number" &&
+          Number.isFinite(count) &&
+          count >= 0
+        );
+      },
+    )
+  ) {
+    return zeroRegionMetadata();
+  }
+  return {
+    message_count: parsed.message_count as number,
+    stable_count: parsed.stable_count as number,
+    semi_count: parsed.semi_count as number,
+    volatile_count: parsed.volatile_count as number,
+  };
+}
+
+function validJsonStringArraySql(column: string): string {
+  const safeJson = `CASE WHEN json_valid(${column}) THEN ${column} ELSE '[]' END`;
+  return `(
+    ${column} IS NOT NULL
+    AND json_valid(${column}) = 1
+    AND json_type(${safeJson}) = 'array'
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(${safeJson}) AS array_item
+      WHERE array_item.type <> 'text'
+    )
+  )`;
+}
+
 function zeroUsage(): TurnExplanationUsage {
   return {
     input_tokens: 0,
@@ -80,25 +181,14 @@ export function rowToTurnExplanation(
     middle_breakpoint_hash: row.middle_breakpoint_hash,
     mutated: row.mutated === 1,
     pruned_blocks_count: row.pruned_blocks_count,
-    prune_decisions: parseJson<TurnExplanationPruneDecision[]>(
-      row.prune_decisions_json,
-      [],
-    ),
+    prune_decisions: parsePruneDecisions(row.prune_decisions_json),
     block_metadata: parseJson<TurnExplanationBlockMetadata[]>(
       row.block_metadata_json,
       [],
     ),
-    region_metadata: parseJson<TurnExplanationRegionMetadata>(
-      row.region_metadata_json,
-      {
-        message_count: 0,
-        stable_count: 0,
-        semi_count: 0,
-        volatile_count: 0,
-      },
-    ),
+    region_metadata: parseRegionMetadata(row.region_metadata_json),
     region_cost: row.region_cost_json ? parseJson<RegionCostBreakdown | null>(row.region_cost_json, null) : null,
-    signals: parseJson<string[]>(row.signals_json, []),
+    signals: parseStringArray(row.signals_json),
     usage: {
       input_tokens: row.usage_input_tokens,
       output_tokens: row.usage_output_tokens,
@@ -722,9 +812,51 @@ export function openDatabase(dbPath: string): CachelaneDb {
     return rows.map(rowToTurnExplanation);
   };
 
-  db.getStats = (params: GetStatsParams): CachelaneStats => {
+  db.getStats = rawDb.transaction((params: GetStatsParams): CachelaneStats => {
     const where = scopedWhere(params);
+    const turnSignalsValid = validJsonStringArraySql("t.signals");
+    const explanationSignalsValid = validJsonStringArraySql(
+      "e.signals_json",
+    );
     const stmt = rawDb.prepare(`
+      WITH scoped_turn_rows AS (
+        SELECT *
+        FROM turns
+        ${where.sql}
+      ),
+      signal_sources AS (
+        SELECT
+          t.*,
+          CASE
+            WHEN ${turnSignalsValid} THEN t.signals
+            WHEN ${explanationSignalsValid} THEN e.signals_json
+            ELSE '[]'
+          END AS pipeline_signals
+        FROM scoped_turn_rows t
+        LEFT JOIN turn_explanations e
+          ON e.turn_id = t.id
+         AND e.workspace_id = t.workspace_id
+         AND e.session_id = t.session_id
+         AND e.turn_number = t.turn_number
+      ),
+      scoped_turns AS (
+        SELECT *,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM json_each(pipeline_signals) AS signal
+              WHERE signal.value = 'error:fallback'
+            ) THEN 'fail_open'
+            WHEN EXISTS (
+              SELECT 1
+              FROM json_each(pipeline_signals) AS signal
+              WHERE signal.value = 'mode:baseline'
+            ) THEN 'baseline'
+            WHEN request_mutated = 1 THEN 'mutated'
+            ELSE 'no_op'
+          END AS pipeline_outcome
+        FROM signal_sources
+      )
       SELECT
         COUNT(*) AS turns,
         COALESCE(SUM(input_tokens), 0) AS input_tokens,
@@ -736,9 +868,12 @@ export function openDatabase(dbPath: string): CachelaneDb {
         COALESCE(SUM(CASE WHEN pruned_blocks_count > 0 THEN 1 ELSE 0 END), 0) AS turns_with_pruning,
         COALESCE(SUM(keepalive_pings_since_last_turn), 0) AS keepalive_pings,
         COALESCE(SUM(CASE WHEN keepalive_pings_since_last_turn > 0 THEN 1 ELSE 0 END), 0) AS turns_with_keepalive,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'fail_open' THEN 1 ELSE 0 END), 0) AS fail_open_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'baseline' THEN 1 ELSE 0 END), 0) AS baseline_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'mutated' THEN 1 ELSE 0 END), 0) AS mutated_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'no_op' THEN 1 ELSE 0 END), 0) AS no_op_turns,
         COALESCE(SUM(CASE WHEN request_mutated = 0 THEN 1 ELSE 0 END), 0) AS pipeline_fallback_turns
-      FROM turns
-      ${where.sql}
+      FROM scoped_turns
     `);
     const row = stmt.get(where.bindings) as {
       turns: number;
@@ -751,6 +886,10 @@ export function openDatabase(dbPath: string): CachelaneDb {
       turns_with_pruning: number;
       keepalive_pings: number;
       turns_with_keepalive: number;
+      fail_open_turns: number;
+      baseline_turns: number;
+      mutated_turns: number;
+      no_op_turns: number;
       pipeline_fallback_turns: number;
     };
     const baseline =
@@ -778,7 +917,14 @@ export function openDatabase(dbPath: string): CachelaneDb {
       effective_cost_units: row.effective_cost_units,
       baseline_cost_units: baseline,
       savings_ratio: savingsRatio,
+      outcome_counts: {
+        fail_open: row.fail_open_turns,
+        baseline: row.baseline_turns,
+        mutated: row.mutated_turns,
+        no_op: row.no_op_turns,
+      },
       pipeline_fallback_turns: row.pipeline_fallback_turns,
+      fail_open_turns: row.fail_open_turns,
       pruner_counts: {
         pruned_blocks: row.pruned_blocks,
         turns_with_pruning: row.turns_with_pruning,
@@ -786,30 +932,35 @@ export function openDatabase(dbPath: string): CachelaneDb {
         // the stub's count, so the original size only survives inside each
         // explanation's prune_decisions_json. Sum it here.
         tokens_reclaimed: (() => {
-          try {
-            const rows = rawDb.prepare(`
-              SELECT prune_decisions_json FROM turn_explanations
-              ${where.sql}${where.sql ? " AND" : " WHERE"} pruned_blocks_count > 0
-            `).all(where.bindings) as { prune_decisions_json: string }[];
-            let total = 0;
-            for (const r of rows) {
-              try {
-                const decisions = JSON.parse(r.prune_decisions_json) as Array<{
-                  tokens_reclaimed?: number;
-                }>;
-                for (const d of decisions) {
-                  if (typeof d.tokens_reclaimed === "number" && d.tokens_reclaimed > 0) {
-                    total += d.tokens_reclaimed;
-                  }
-                }
-              } catch {
-                /* pre-field or malformed record — contributes 0 */
+          const rows = rawDb.prepare(`
+            WITH scoped_turns AS (
+              SELECT *
+              FROM turns
+              ${where.sql}
+            )
+            SELECT e.prune_decisions_json
+            FROM scoped_turns t
+            INNER JOIN turn_explanations e
+              ON e.turn_id = t.id
+             AND e.workspace_id = t.workspace_id
+             AND e.session_id = t.session_id
+             AND e.turn_number = t.turn_number
+            WHERE e.pruned_blocks_count > 0
+          `).all(where.bindings) as { prune_decisions_json: string }[];
+          let total = 0;
+          for (const r of rows) {
+            const decisions = parsePruneDecisions(r.prune_decisions_json);
+            for (const decision of decisions) {
+              if (
+                typeof decision.tokens_reclaimed === "number" &&
+                Number.isFinite(decision.tokens_reclaimed) &&
+                decision.tokens_reclaimed > 0
+              ) {
+                total += decision.tokens_reclaimed;
               }
             }
-            return total;
-          } catch {
-            return 0;
           }
+          return total;
         })(),
       },
       keepalive_counts: {
@@ -825,12 +976,12 @@ export function openDatabase(dbPath: string): CachelaneDb {
           ${where.sql}
         `).get(where.bindings) as { compressed_blocks: number; tokens_saved: number } | undefined;
         const profileRows = rawDb.prepare(`
-          SELECT profile_id,
+          SELECT COALESCE(profile_id, '(unprofiled)') AS profile_id,
                  COALESCE(SUM(CASE WHEN tokens_saved > 0 THEN 1 ELSE 0 END), 0) AS compressed_blocks,
                  COALESCE(SUM(tokens_saved), 0) AS tokens_saved
           FROM compression_events
-          ${where.sql}${where.sql ? " AND" : " WHERE"} profile_id IS NOT NULL
-          GROUP BY profile_id
+          ${where.sql}
+          GROUP BY COALESCE(profile_id, '(unprofiled)')
           ORDER BY profile_id
         `).all(where.bindings) as { profile_id: string; compressed_blocks: number; tokens_saved: number }[];
         return {
@@ -840,7 +991,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
         };
       })(),
     };
-  };
+  }) as (params: GetStatsParams) => CachelaneStats;
 
   db.recordCompressionEvents = (
     turnId: string,

@@ -87,6 +87,50 @@ const configSchema = z.object({
     .default(DEFAULT_CONFIG.compression),
 });
 
+function assertSupportedVersion(raw: unknown): void {
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    "version" in raw &&
+    typeof (raw as { version: unknown }).version === "number" &&
+    (raw as { version: number }).version > CURRENT_CONFIG_VERSION
+  ) {
+    throw new Error(
+      `config schema version ${(raw as { version: number }).version} is newer than supported (${CURRENT_CONFIG_VERSION})`,
+    );
+  }
+}
+
+/**
+ * Read a config for provenance without creating it or substituting defaults.
+ * Report generation must not present a default route as if it came from the
+ * selected database's current config.
+ */
+export function loadConfigStrict(configPath: string): CachelaneConfig {
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`config does not exist at ${configPath}`);
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    throw new Error(
+      `config at ${configPath} is malformed JSON: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  assertSupportedVersion(raw);
+  try {
+    return configSchema.parse(raw) as CachelaneConfig;
+  } catch (err) {
+    if (!(err instanceof z.ZodError)) throw err;
+    throw new Error(`config at ${configPath} failed schema validation`);
+  }
+}
+
 export function loadConfig(configPath: string): CachelaneConfig {
   if (!fs.existsSync(configPath)) {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -102,17 +146,7 @@ export function loadConfig(configPath: string): CachelaneConfig {
     return { ...DEFAULT_CONFIG };
   }
 
-  if (
-    typeof raw === "object" &&
-    raw !== null &&
-    "version" in raw &&
-    typeof (raw as { version: unknown }).version === "number" &&
-    (raw as { version: number }).version > CURRENT_CONFIG_VERSION
-  ) {
-    throw new Error(
-      `config schema version ${(raw as { version: number }).version} is newer than supported (${CURRENT_CONFIG_VERSION})`
-    );
-  }
+  assertSupportedVersion(raw);
 
   try {
     return configSchema.parse(raw) as CachelaneConfig;

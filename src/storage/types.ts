@@ -339,6 +339,10 @@ export interface TurnExplanationRecord {
 
 export type StatsScope = "session" | "workspace" | "all";
 
+export type PipelineOutcome = "fail_open" | "baseline" | "mutated" | "no_op";
+
+export type PipelineOutcomeCounts = Record<PipelineOutcome, number>;
+
 export interface GetStatsParams {
   scope: StatsScope;
   workspace_id?: string;
@@ -401,7 +405,15 @@ export interface CachelaneStats {
   effective_cost_units: number;
   baseline_cost_units: number;
   savings_ratio: number;
+  /** Exclusive pipeline outcomes. Optional for callers constructing the legacy shape. */
+  outcome_counts?: PipelineOutcomeCounts;
+  /**
+   * Legacy metric: every turn where request_mutated=0, including intentional
+   * baseline and no-op turns as well as fail-open turns.
+   */
   pipeline_fallback_turns: number;
+  /** Explicit fail-open count for callers that need actual pipeline errors. */
+  fail_open_turns?: number;
   pruner_counts: {
     pruned_blocks: number;
     turns_with_pruning: number;

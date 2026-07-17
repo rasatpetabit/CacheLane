@@ -4,7 +4,11 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 
 import { Command } from "commander";
-import { loadConfig, defaultWorkspaceId } from "../config/index.js";
+import {
+  loadConfig,
+  loadConfigStrict,
+  defaultWorkspaceId,
+} from "../config/index.js";
 import { openDatabase, calculateEffectiveCostUnits } from "../storage/index.js";
 import { startCachelaneStdioServer } from "../server/index.js";
 import { startProxy } from "../proxy/server.js";
@@ -22,7 +26,14 @@ import {
   setTelemetryOptIn,
 } from "./config.js";
 import { formatDoctor, runDoctorAsync } from "./doctor.js";
-import { formatExplanation, formatSessions, formatStats, formatTopBlocks, jsonLine } from "./format.js";
+import {
+  formatExplanation,
+  formatReportCompletion,
+  formatSessions,
+  formatStats,
+  formatTopBlocks,
+  jsonLine,
+} from "./format.js";
 import { getBannerText, printHelp } from "./banner.js";
 import { installCachelane, uninstallCachelane } from "./install.js";
 import { aiderTarget } from "./install-targets/aider.js";
@@ -38,6 +49,7 @@ import {
 } from "../server/tools.js";
 import type { CachelaneConfig } from "../types/index.js";
 import type { RecordedBenchmarkReport } from "../benchmark/types.js";
+import type { ReportSource } from "../report/types.js";
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -418,11 +430,38 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
       const { generateReport, openInBrowser, buildReportData } = await import("../report/index.js");
       const { context, close } = contextFromOptions(env, cmd);
       try {
+        const reportDbPath = path.resolve(cmd.db ?? cachelaneDbPath(env));
+        const reportHome = cmd.db
+          ? path.dirname(reportDbPath)
+          : path.resolve(cachelaneHome(env));
+        let reportProxy: ReportSource["proxy"] = null;
+        const reportConfigPath = path.join(reportHome, "config.json");
+        if (fs.existsSync(reportConfigPath)) {
+          try {
+            const config = loadConfigStrict(reportConfigPath);
+            reportProxy = {
+              host: config.proxy.host,
+              port: config.proxy.port,
+              upstream_host: config.proxy.upstream_host,
+              upstream_port: config.proxy.upstream_port,
+              upstream_ssl: config.proxy.upstream_ssl,
+            };
+          } catch (err) {
+            io.stderr(
+              `cachelane: report route provenance unavailable because ${reportConfigPath} is invalid (${err instanceof Error ? err.message : String(err)}); fix or replace that config to include the current route\n`,
+            );
+          }
+        }
         const opts = {
           scope: cmd.scope,
           workspace_id: context.workspace_id,
           session_id: context.session_id,
           generated_at: new Date().toISOString(),
+          source: {
+            cachelane_home: reportHome,
+            db_path: reportDbPath,
+            proxy: reportProxy,
+          },
         };
         if (cmd.json) {
           io.stdout(jsonLine(buildReportData(context.db, opts)));
@@ -443,7 +482,7 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
         }
         const outPath = cmd.out ?? path.join(cachelaneHome(env), "report.html");
         const result = generateReport(context.db, opts, outPath, benchmark);
-        io.stdout(`wrote ${result.out_path} (${result.turns} turns, ${result.sessions} sessions)\n`);
+        io.stdout(`${formatReportCompletion(result)}\n`);
         if (cmd.open !== false) {
           openInBrowser(result.out_path);
           io.stdout("opening in browser...\n");

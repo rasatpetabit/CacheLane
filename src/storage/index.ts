@@ -18,6 +18,8 @@ export type {
   TurnExplanationRow,
   TurnExplanationRecord,
   StatsScope,
+  PipelineOutcome,
+  PipelineOutcomeCounts,
   GetStatsParams,
   CachelaneStats,
   SessionSummaryRow,

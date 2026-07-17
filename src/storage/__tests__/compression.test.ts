@@ -207,6 +207,40 @@ describe("by_profile aggregation", () => {
     expect(gitStatus?.compressed_blocks).toBe(2);
   });
 
+  it("includes unprofiled events so profile subtotals reconcile", () => {
+    db.recordCompressionEvents("turn-1", "sess-1", "ws-1", [
+      { tool_use_id: "profiled", content_type: "shell", original_tokens: 100, compressed_tokens: 30, tokens_saved: 70, profile_id: "git-status" },
+      { tool_use_id: "unprofiled", content_type: "json", original_tokens: 100, compressed_tokens: 40, tokens_saved: 60 },
+    ]);
+
+    const stats = db.getStats({
+      scope: "session",
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+    });
+    const unprofiled = stats.compression_counts.by_profile.find(
+      (profile) => profile.profile_id === "(unprofiled)",
+    );
+
+    expect(unprofiled).toEqual({
+      profile_id: "(unprofiled)",
+      tokens_saved: 60,
+      compressed_blocks: 1,
+    });
+    expect(
+      stats.compression_counts.by_profile.reduce(
+        (total, profile) => total + profile.tokens_saved,
+        0,
+      ),
+    ).toBe(stats.compression_counts.tokens_saved);
+    expect(
+      stats.compression_counts.by_profile.reduce(
+        (total, profile) => total + profile.compressed_blocks,
+        0,
+      ),
+    ).toBe(stats.compression_counts.compressed_blocks);
+  });
+
   it("scopes by_profile to workspace/session", () => {
     db.recordCompressionEvents("turn-1", "other-sess", "ws-1", [
       { tool_use_id: "x", content_type: "shell", original_tokens: 100, compressed_tokens: 20, tokens_saved: 80, profile_id: "git-status" },

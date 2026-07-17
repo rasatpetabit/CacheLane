@@ -3,6 +3,8 @@ import { THEME_COLORS } from "./theme.js";
 export interface CurveInput {
   baselineCumulative: number[];
   effectiveCumulative: number[];
+  /** Actual plotted turn numbers. Omit to retain the legacy index-based scale. */
+  turnNumbers?: number[];
   longSessionThreshold: number;
   firstPruneTurn: number | null;
 }
@@ -11,12 +13,15 @@ const W = 720;
 const H = 320;
 const PAD = 40;
 
-function points(series: number[], maxY: number): string {
-  const n = series.length;
-  if (n === 0) return "";
+function points(
+  series: number[],
+  xValues: number[],
+  maxY: number,
+  xAt: (value: number) => number,
+): string {
   return series
     .map((y, i) => {
-      const x = PAD + (i / Math.max(1, n - 1)) * (W - 2 * PAD);
+      const x = xAt(xValues[i] ?? i);
       const yy = H - PAD - (maxY === 0 ? 0 : (y / maxY) * (H - 2 * PAD));
       return `${x.toFixed(1)},${yy.toFixed(1)}`;
     })
@@ -27,21 +32,58 @@ export function renderCurveSvg(input: CurveInput): string {
   if (input.baselineCumulative.length === 0) {
     return `<svg viewBox="0 0 ${W} ${H}" class="cl-chart"><text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="${THEME_COLORS.fgFaint}">No data yet</text></svg>`;
   }
-  const maxY = Math.max(...input.baselineCumulative, ...input.effectiveCumulative, 1);
-  const baseline = points(input.baselineCumulative, maxY);
-  const effective = points(input.effectiveCumulative, maxY);
   const n = input.baselineCumulative.length;
-  const xAt = (turnIdx: number) =>
-    PAD + (turnIdx / Math.max(1, n - 1)) * (W - 2 * PAD);
+  const hasTurnNumbers =
+    input.turnNumbers !== undefined &&
+    input.turnNumbers.length === n &&
+    input.turnNumbers.every(Number.isFinite);
+  const xValues = hasTurnNumbers
+    ? input.turnNumbers!
+    : Array.from({ length: n }, (_, index) => index);
+  let minX = xValues[0] ?? 0;
+  let maxX = minX;
+  for (const value of xValues) {
+    if (value < minX) minX = value;
+    if (value > maxX) maxX = value;
+  }
+  let maxY = 1;
+  for (const value of input.baselineCumulative) {
+    if (value > maxY) maxY = value;
+  }
+  for (const value of input.effectiveCumulative) {
+    if (value > maxY) maxY = value;
+  }
+  const xAt = (value: number) =>
+    PAD +
+    ((value - minX) / Math.max(1, maxX - minX)) *
+      (W - 2 * PAD);
+  const baseline = points(
+    input.baselineCumulative,
+    xValues,
+    maxY,
+    xAt,
+  );
+  const effective = points(
+    input.effectiveCumulative,
+    xValues,
+    maxY,
+    xAt,
+  );
 
   const pruneMarker =
-    input.firstPruneTurn !== null && input.firstPruneTurn < n
+    input.firstPruneTurn !== null &&
+    input.firstPruneTurn >= minX &&
+    input.firstPruneTurn <= maxX
       ? `<line x1="${xAt(input.firstPruneTurn).toFixed(1)}" y1="${PAD}" x2="${xAt(input.firstPruneTurn).toFixed(1)}" y2="${H - PAD}" stroke="${THEME_COLORS.accent}" stroke-dasharray="4" /><text x="${(xAt(input.firstPruneTurn) + 4).toFixed(1)}" y="${PAD + 12}" fill="${THEME_COLORS.accent}" font-size="11">pruning</text>`
       : "";
 
+  const thresholdValue = hasTurnNumbers
+    ? input.longSessionThreshold
+    : input.longSessionThreshold - 1;
+  const longRegionStart = Math.max(minX, thresholdValue);
   const longRegion =
-    input.longSessionThreshold < n
-      ? `<rect x="${xAt(input.longSessionThreshold).toFixed(1)}" y="${PAD}" width="${(W - PAD - xAt(input.longSessionThreshold)).toFixed(1)}" height="${H - 2 * PAD}" fill="${THEME_COLORS.warn}" opacity="0.08" /><text x="${(xAt(input.longSessionThreshold) + 4).toFixed(1)}" y="${(H - PAD - 4).toFixed(1)}" fill="${THEME_COLORS.warn}" font-size="11">long session (≥${input.longSessionThreshold} turns)</text>`
+    thresholdValue <= maxX
+      ? `<rect x="${xAt(longRegionStart).toFixed(1)}" y="${PAD}" width="${(W - PAD - xAt(longRegionStart)).toFixed(1)}" height="${H - 2 * PAD}" fill="${THEME_COLORS.warn}" opacity="0.08" /><text x="${(xAt(longRegionStart) + 4).toFixed(1)}" y="${(H - PAD - 4).toFixed(1)}" fill="${THEME_COLORS.warn}" font-size="11">long session (≥${input.longSessionThreshold} turns)</text>`
       : "";
 
   return `<svg viewBox="0 0 ${W} ${H}" class="cl-chart">

@@ -135,10 +135,12 @@ export function probeUpstream(
 }
 
 export function computeFallbackRate(
-  explanations: { mutated: boolean }[],
+  explanations: readonly { signals: readonly string[] }[],
 ): { fallback_count: number; total: number; fraction: number } {
   const total = explanations.length;
-  const fallback_count = explanations.filter((e) => !e.mutated).length;
+  const fallback_count = explanations.filter((explanation) =>
+    explanation.signals.includes("error:fallback"),
+  ).length;
   return { fallback_count, total, fraction: total === 0 ? 0 : fallback_count / total };
 }
 

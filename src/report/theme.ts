@@ -32,6 +32,7 @@ export const CACHELANE_REPORT_CSS = `
   --color-success: oklch(0.48 0.045 145);
   --color-success-bg: oklch(0.95 0.01 145);
   --color-warn: oklch(0.48 0.070 50);
+  --color-warn-bg: oklch(0.95 0.015 75);
   --color-danger: oklch(0.38 0.100 35);
   --color-danger-bg: oklch(0.95 0.020 35);
 }
@@ -65,6 +66,9 @@ th { color: var(--color-fg-muted); font-weight: 600; }
 .badge { padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
 .badge.ok { background: var(--color-success-bg); color: var(--color-success); }
 .badge.fail { background: var(--color-danger-bg); color: var(--color-danger); }
+.badge.neutral { background: var(--color-bg-inline); color: var(--color-fg-muted); }
+.badge.warn { background: var(--color-warn-bg); color: var(--color-warn); }
+.integrity-note { max-width: none; }
 .cl-chart {
   width: 100%; max-width: 760px; margin-top: 8px;
   background: var(--color-bg-elev); border: 1px solid var(--color-border); border-radius: 12px;

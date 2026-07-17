@@ -584,6 +584,17 @@ describe("cachelane CLI", () => {
     const data = JSON.parse(output);
     expect(data.privacy.content_persisted).toBe(false);
     expect(Array.isArray(data.turns)).toBe(true);
+    expect(data.source.db_path).toBe(path.join(env.CACHELANE_HOME!, "cachelane.db"));
+  });
+
+  it("report HTML identifies the selected CacheLane home instead of a hardcoded lane", async () => {
+    const smokeHome = path.join(tmpDir, ".cachelane-smoke");
+    env.CACHELANE_HOME = smokeHome;
+    const outPath = path.join(tmpDir, "smoke-report.html");
+    await run(["report", "--out", outPath, "--no-open"]);
+    const html = fs.readFileSync(outPath, "utf-8");
+    expect(html).toContain(path.join(smokeHome, "cachelane.db"));
+    expect(html).not.toContain("~/.cachelane/cachelane.db");
   });
 });
 

@@ -9,11 +9,22 @@ import type { RecordedBenchmarkReport } from "../benchmark/types.js";
 
 export { buildReportData } from "./query.js";
 export { renderReportHtml } from "./render-html.js";
-export type { ReportData, ReportOptions, ReportTurn } from "./types.js";
+export type {
+  ExplanationCoverage,
+  ReportData,
+  ReportOptions,
+  ReportSource,
+  ReportTurn,
+} from "./types.js";
 
 export interface GenerateReportResult {
   out_path: string;
+  /** Legacy explanation-backed detail count. */
   turns: number;
+  /** Canonical recorded turn count. */
+  recorded_turns?: number;
+  /** Canonical completed turns rendered in the capped display window. */
+  displayed_turns?: number;
   sessions: number;
 }
 
@@ -25,7 +36,13 @@ export function generateReport(
 ): GenerateReportResult {
   const data = buildReportData(db, opts);
   writeFileSync(outPath, renderReportHtml(data, benchmark), "utf8");
-  return { out_path: outPath, turns: data.turns.length, sessions: data.sessions.length };
+  return {
+    out_path: outPath,
+    turns: data.turns.length,
+    recorded_turns: data.stats.turns,
+    displayed_turns: (data.completed_turns ?? data.turns).length,
+    sessions: data.sessions.length,
+  };
 }
 
 export function openInBrowser(filePath: string): void {

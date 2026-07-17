@@ -394,6 +394,128 @@ describe("openDatabase", () => {
     });
   });
 
+  it("getStats reports mutually exclusive pipeline outcomes", () => {
+    db = openDatabase(path.join(tmpDir, "test.db"));
+    const now = Date.now();
+    const baseTurn = {
+      workspace_id: "ws-outcomes",
+      session_id: "sess-outcomes",
+      model: "claude-opus-4-7",
+      provider: "anthropic",
+      input_tokens: 100,
+      output_tokens: 0,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      effective_cost_units: 100,
+      prefix_breakpoint_hash: null,
+      middle_breakpoint_hash: null,
+      pruned_blocks_count: 0,
+      keepalive_pings_since_last_turn: 0,
+      created_at: now,
+    };
+
+    db.insertTurn({
+      ...baseTurn,
+      id: "turn-outcome-mutated",
+      turn_number: 1,
+      request_mutated: 1,
+      signals: JSON.stringify(["prefix_cached"]),
+    });
+    db.insertTurn({
+      ...baseTurn,
+      id: "turn-outcome-no-op",
+      turn_number: 2,
+      request_mutated: 0,
+      signals: JSON.stringify(["prefix_cached"]),
+    });
+    db.insertTurn({
+      ...baseTurn,
+      id: "turn-outcome-baseline",
+      turn_number: 3,
+      request_mutated: 0,
+      signals: JSON.stringify(["mode:baseline"]),
+    });
+    db.insertTurn({
+      ...baseTurn,
+      id: "turn-outcome-fail-open",
+      turn_number: 4,
+      request_mutated: 0,
+      signals: JSON.stringify(["error:fallback"]),
+    });
+
+    const stats = db.getStats({
+      scope: "session",
+      workspace_id: "ws-outcomes",
+      session_id: "sess-outcomes",
+    });
+
+    expect(stats.outcome_counts).toEqual({
+      fail_open: 1,
+      baseline: 1,
+      mutated: 1,
+      no_op: 1,
+    });
+    expect(
+      Object.values(stats.outcome_counts!).reduce((total, count) => total + count, 0),
+    ).toBe(stats.turns);
+    expect(stats.pipeline_fallback_turns).toBe(3);
+    expect(stats.fail_open_turns).toBe(1);
+  });
+
+  it("getStats gives fail-open and baseline signals precedence over mutation", () => {
+    db = openDatabase(path.join(tmpDir, "test.db"));
+    const now = Date.now();
+    const baseTurn = {
+      workspace_id: "ws-precedence",
+      session_id: "sess-precedence",
+      model: "claude-opus-4-7",
+      provider: "anthropic",
+      input_tokens: 100,
+      output_tokens: 0,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      effective_cost_units: 100,
+      prefix_breakpoint_hash: null,
+      middle_breakpoint_hash: null,
+      pruned_blocks_count: 0,
+      keepalive_pings_since_last_turn: 0,
+      request_mutated: 1,
+      created_at: now,
+    };
+
+    db.insertTurn({
+      ...baseTurn,
+      id: "turn-precedence-fail-open",
+      turn_number: 1,
+      signals: JSON.stringify(["mode:baseline", "error:fallback"]),
+    });
+    db.insertTurn({
+      ...baseTurn,
+      id: "turn-precedence-baseline",
+      turn_number: 2,
+      signals: JSON.stringify(["mode:baseline"]),
+    });
+
+    const stats = db.getStats({
+      scope: "session",
+      workspace_id: "ws-precedence",
+      session_id: "sess-precedence",
+    });
+
+    expect(stats.outcome_counts).toEqual({
+      fail_open: 1,
+      baseline: 1,
+      mutated: 0,
+      no_op: 0,
+    });
+    expect(stats.pipeline_fallback_turns).toBe(0);
+    expect(stats.fail_open_turns).toBe(1);
+  });
+
   it("markStub sets is_stub=1, refetch_handle and stub_summary", () => {
     db = openDatabase(path.join(tmpDir, "test.db"));
     const now = Date.now();

@@ -3,17 +3,32 @@ import type {
   SessionSummaryRow,
   TurnExplanationRecord,
 } from "../storage/index.js";
+import type { GenerateReportResult } from "../report/index.js";
 
 function percent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
 export function formatStats(stats: CachelaneStats): string {
+  const failOpen =
+    stats.fail_open_turns ?? stats.outcome_counts?.fail_open ?? 0;
+  const baseline = stats.outcome_counts?.baseline ?? 0;
+  const mutated =
+    stats.outcome_counts?.mutated ??
+    Math.max(stats.turns - stats.pipeline_fallback_turns, 0);
+  const noOp =
+    stats.outcome_counts?.no_op ??
+    Math.max(stats.pipeline_fallback_turns - baseline - failOpen, 0);
   return [
     `Scope: ${stats.scope}`,
     `Turns: ${stats.turns}`,
     `Cache hit ratio: ${percent(stats.cache_hit_ratio)}`,
     `Pipeline fallback turns: ${stats.pipeline_fallback_turns}`,
+    "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
+    `Mutated turns: ${mutated}`,
+    `Baseline turns: ${baseline}`,
+    `No-op turns: ${noOp}`,
+    `Fail-open turns: ${failOpen}`,
     `Effective cost units: ${stats.effective_cost_units.toFixed(2)}`,
     `Baseline cost units: ${stats.baseline_cost_units.toFixed(2)}`,
     `Savings ratio: ${percent(stats.savings_ratio)}`,
@@ -61,6 +76,12 @@ export function formatSessions(rows: SessionSummaryRow[]): string {
 
 export function jsonLine(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+export function formatReportCompletion(result: GenerateReportResult): string {
+  const recordedTurns = result.recorded_turns ?? result.turns;
+  const displayedTurns = result.displayed_turns ?? result.turns;
+  return `wrote ${result.out_path} (${recordedTurns} recorded turns, ${displayedTurns} shown, ${result.sessions} sessions)`;
 }
 
 function tierMultiplier(tier: string): number {

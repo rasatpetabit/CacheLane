@@ -44,6 +44,10 @@ interface SessionRow {
   turns_with_pruning: number;
   keepalive_pings: number;
   mutated_turns: number;
+  baseline_turns: number;
+  no_op_turns: number;
+  fail_open_turns: number;
+  /** Legacy request_mutated=0 count. */
   fallback_turns: number;
   first_turn_ms: number;
   last_turn_ms: number;
@@ -84,6 +88,16 @@ interface SessionReport {
   savings_dollars: number;
   // Pipeline health
   mutated_turns: number;
+  baseline_turns: number;
+  no_op_turns: number;
+  fail_open_turns: number;
+  outcome_counts: {
+    mutated: number;
+    baseline: number;
+    no_op: number;
+    fail_open: number;
+  };
+  /** Legacy request_mutated=0 count. */
   fallback_turns: number;
   turns_with_pruning: number;
   pruned_blocks: number;
@@ -139,17 +153,21 @@ function detectAnomalies(session: SessionRow, turns: TurnRow[]): string[] {
   }
 
   // 2. All fallback (no mutations)
-  if (session.mutated_turns === 0 && session.turns > 0) {
+  const baselineOnly =
+    session.turns > 0 && session.baseline_turns === session.turns;
+  if (session.mutated_turns === 0 && session.turns > 0 && !baselineOnly) {
     anomalies.push(
       `No requests were mutated — CacheLane pipeline may not be intercepting traffic`
     );
   }
 
   // 3. High fallback ratio
-  const fallbackRatio = session.turns > 0 ? session.fallback_turns / session.turns : 0;
-  if (fallbackRatio > 0.1 && session.fallback_turns > 1) {
+  const fallbackRatio = session.turns > 0
+    ? session.fail_open_turns / session.turns
+    : 0;
+  if (fallbackRatio > 0.1 && session.fail_open_turns > 1) {
     anomalies.push(
-      `${session.fallback_turns}/${session.turns} turns (${(fallbackRatio * 100).toFixed(0)}%) used fallback mode — pipeline errors may be occurring`
+      `${session.fail_open_turns}/${session.turns} turns (${(fallbackRatio * 100).toFixed(0)}%) failed open — pipeline errors may be occurring`
     );
   }
 
@@ -243,8 +261,66 @@ export function runLiveReport(options: {
   try {
     const sessionFilter = options.session ? `WHERE session_id = ?` : ``;
     const sessionParams = options.session ? [options.session] : [];
+    const safeTurnSignals =
+      "CASE WHEN json_valid(t.signals) THEN t.signals ELSE '[]' END";
+    const safeExplanationSignals =
+      "CASE WHEN json_valid(e.signals_json) THEN e.signals_json ELSE '[]' END";
+    const validTurnSignals = `
+      t.signals IS NOT NULL
+      AND json_valid(t.signals) = 1
+      AND json_type(${safeTurnSignals}) = 'array'
+      AND NOT EXISTS (
+        SELECT 1 FROM json_each(${safeTurnSignals}) item
+        WHERE item.type <> 'text'
+      )`;
+    const validExplanationSignals = `
+      e.signals_json IS NOT NULL
+      AND json_valid(e.signals_json) = 1
+      AND json_type(${safeExplanationSignals}) = 'array'
+      AND NOT EXISTS (
+        SELECT 1 FROM json_each(${safeExplanationSignals}) item
+        WHERE item.type <> 'text'
+      )`;
 
     const sessions = rawDb.prepare(`
+      WITH selected_turns AS (
+        SELECT *
+        FROM turns
+        ${sessionFilter}
+      ),
+      signal_sources AS (
+        SELECT
+          t.*,
+          CASE
+            WHEN ${validTurnSignals} THEN t.signals
+            WHEN ${validExplanationSignals} THEN e.signals_json
+            ELSE '[]'
+          END AS pipeline_signals
+        FROM selected_turns t
+        LEFT JOIN turn_explanations e
+          ON e.turn_id = t.id
+         AND e.workspace_id = t.workspace_id
+         AND e.session_id = t.session_id
+         AND e.turn_number = t.turn_number
+      ),
+      classified_turns AS (
+        SELECT *,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM json_each(pipeline_signals) AS signal
+              WHERE signal.value = 'error:fallback'
+            ) THEN 'fail_open'
+            WHEN EXISTS (
+              SELECT 1
+              FROM json_each(pipeline_signals) AS signal
+              WHERE signal.value = 'mode:baseline'
+            ) THEN 'baseline'
+            WHEN request_mutated = 1 THEN 'mutated'
+            ELSE 'no_op'
+          END AS pipeline_outcome
+        FROM signal_sources
+      )
       SELECT
         workspace_id,
         session_id,
@@ -258,12 +334,14 @@ export function runLiveReport(options: {
         COALESCE(SUM(pruned_blocks_count), 0) AS pruned_blocks,
         COALESCE(SUM(CASE WHEN pruned_blocks_count > 0 THEN 1 ELSE 0 END), 0) AS turns_with_pruning,
         COALESCE(SUM(keepalive_pings_since_last_turn), 0) AS keepalive_pings,
-        COALESCE(SUM(CASE WHEN request_mutated = 1 THEN 1 ELSE 0 END), 0) AS mutated_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'mutated' THEN 1 ELSE 0 END), 0) AS mutated_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'baseline' THEN 1 ELSE 0 END), 0) AS baseline_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'no_op' THEN 1 ELSE 0 END), 0) AS no_op_turns,
+        COALESCE(SUM(CASE WHEN pipeline_outcome = 'fail_open' THEN 1 ELSE 0 END), 0) AS fail_open_turns,
         COALESCE(SUM(CASE WHEN request_mutated = 0 THEN 1 ELSE 0 END), 0) AS fallback_turns,
         MIN(created_at) AS first_turn_ms,
         MAX(created_at) AS last_turn_ms
-      FROM turns
-      ${sessionFilter}
+      FROM classified_turns
       GROUP BY workspace_id, session_id
       ORDER BY last_turn_ms DESC
     `).all(...sessionParams) as SessionRow[];
@@ -317,6 +395,15 @@ export function runLiveReport(options: {
         effective_dollars: eDollars,
         savings_dollars: bDollars - eDollars,
         mutated_turns: s.mutated_turns,
+        baseline_turns: s.baseline_turns,
+        no_op_turns: s.no_op_turns,
+        fail_open_turns: s.fail_open_turns,
+        outcome_counts: {
+          mutated: s.mutated_turns,
+          baseline: s.baseline_turns,
+          no_op: s.no_op_turns,
+          fail_open: s.fail_open_turns,
+        },
         fallback_turns: s.fallback_turns,
         turns_with_pruning: s.turns_with_pruning,
         pruned_blocks: s.pruned_blocks,
@@ -440,7 +527,11 @@ function renderReport(report: FullReport): string {
     lines.push("");
 
     lines.push(`  ${C.bold}Pipeline Health:${C.reset}`);
-    lines.push(`    Mutated turns:   ${s.mutated_turns}/${s.turns}  ${s.mutated_turns === s.turns ? `${C.green}✓ all turns processed${C.reset}` : `${C.yellow}⚠ ${s.fallback_turns} fallbacks${C.reset}`}`);
+    lines.push(`    Mutated turns:   ${s.mutated_turns}/${s.turns}`);
+    lines.push(`    Baseline turns:  ${s.baseline_turns}/${s.turns}`);
+    lines.push(`    No-op turns:     ${s.no_op_turns}/${s.turns}`);
+    lines.push(`    Fail-open turns: ${s.fail_open_turns}/${s.turns}  ${s.fail_open_turns === 0 ? `${C.green}✓ none${C.reset}` : `${C.yellow}⚠ pipeline errors occurred${C.reset}`}`);
+    lines.push(`    Legacy fallback: ${s.fallback_turns}/${s.turns} request_mutated=0`);
     lines.push(`    Pruned blocks:   ${s.pruned_blocks} across ${s.turns_with_pruning} turns`);
     lines.push(`    Keepalive pings: ${s.keepalive_pings}`);
     lines.push("");
@@ -486,11 +577,17 @@ function renderReport(report: FullReport): string {
   }
 
   lines.push(`${C.bold}${SEP}${C.reset}`);
-  const workingSessions = report.sessions.filter(s => s.savings_ratio > 0.3);
-  const degradedSessions = report.sessions.filter(s => s.savings_ratio > 0 && s.savings_ratio <= 0.3);
-  const brokenSessions = report.sessions.filter(s => s.savings_ratio <= 0 && s.turns > 0);
+  const evaluatedSessions = report.sessions.filter(
+    (s) => !(s.turns > 0 && s.baseline_turns === s.turns),
+  );
+  const workingSessions = evaluatedSessions.filter(s => s.savings_ratio > 0.3);
+  const degradedSessions = evaluatedSessions.filter(s => s.savings_ratio > 0 && s.savings_ratio <= 0.3);
+  const brokenSessions = evaluatedSessions.filter(s => s.savings_ratio <= 0 && s.turns > 0);
 
-  if (workingSessions.length > 0) {
+  if (evaluatedSessions.length === 0 && report.sessions.length > 0) {
+    lines.push(`  ${C.bold}${C.yellow}• VERDICT: baseline-only sessions${C.reset}`);
+    lines.push(`  ${C.yellow}  No treatment traffic was recorded, so interception savings are unevaluated${C.reset}`);
+  } else if (workingSessions.length > 0) {
     const bestSession = workingSessions.reduce((a, b) => a.savings_ratio > b.savings_ratio ? a : b);
     lines.push(`  ${C.bold}${C.green}✓ VERDICT: CacheLane is working${C.reset}`);
     lines.push(`  ${C.green}  ${workingSessions.length} sessions with >30% savings${C.reset}`);
