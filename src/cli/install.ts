@@ -226,15 +226,19 @@ function mergeHooksIntoSettings(
   const settings = readJsonObject(settingsPath);
   const hooks: JsonObject = isObject(settings.hooks) ? { ...(settings.hooks as JsonObject) } : {};
 
+  // Proxy path does pruning; hook-mutate is deprecated (cannot prune).
+  // Keep lightweight hook events for session bookkeeping only, and pin
+  // CACHELANE_HOME so dual-home deploys (CC Anthropic vs Pi LiteLLM) stay correct.
+  const home = cachelaneHome(process.env);
   const entries = [
-    { event: "UserPromptSubmit", cmdName: "hook-mutate" },
+    { event: "UserPromptSubmit", cmdName: "hook user-prompt-submit" },
     { event: "Stop", cmdName: "hook stop" },
   ] as const;
 
   let changed = false;
 
   for (const { event, cmdName } of entries) {
-    const cmd = `"${nodeExec}" "${cliScript}" ${cmdName}`;
+    const cmd = `CACHELANE_HOME="${home}" "${nodeExec}" "${cliScript}" ${cmdName}`;
     const existing: unknown[] = Array.isArray(hooks[event]) ? [...(hooks[event] as unknown[])] : [];
 
     // Remove stale cachelane entries (command path may have changed after rebuild).
@@ -362,7 +366,7 @@ export function installCachelane(env: NodeJS.ProcessEnv = process.env): InstallR
 
   // Marker file — used by `cachelane doctor` to confirm hooks are registered
   const markerContent = JSON.stringify(
-    { hooks: { UserPromptSubmit: ["hook-mutate"], Stop: ["hook stop"] } },
+    { hooks: { UserPromptSubmit: ["hook user-prompt-submit"], Stop: ["hook stop"] } },
     null,
     2,
   ) + "\n";

@@ -315,3 +315,58 @@ systemctl --user stop cachelane-smoke.service cachelane-anthropic.service
 
 Dry-run verified 2026-07-17 (backups present).
 
+## How to view CacheLane statistics
+
+Two data homes (do not mix them):
+
+| Traffic | `CACHELANE_HOME` | Port | Upstream |
+|---|---|---|---|
+| Pi `litellm/*` | `~/.cachelane-smoke` | 7332 | LiteLLM |
+| Claude Code | `~/.cachelane` | 7333 | api.anthropic.com |
+
+### One-shot dual view
+```bash
+node /srv/cachelane/scripts/stats-dual.mjs
+```
+
+### CLI (pick a home)
+```bash
+# Pi path (most traffic today)
+CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs stats --scope all
+CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs sessions
+CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs explain --top-blocks
+CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs doctor
+
+# Claude Code path
+CACHELANE_HOME=~/.cachelane node /srv/cachelane/dist/cli/index.cjs stats --scope all
+```
+
+### HTML dashboard
+```bash
+CACHELANE_HOME=~/.cachelane-smoke node /srv/cachelane/dist/cli/index.cjs report --scope all --out ~/.cachelane-smoke/report.html
+# open ~/.cachelane-smoke/report.html in a browser
+# CC: ~/.cachelane/report.html
+```
+
+### Inside Claude Code (MCP)
+After restarting CC so it reloads MCP:
+- Server **`cachelane`** → CC/Anthropic DB (`~/.cachelane`)
+- Server **`cachelane-pi`** → Pi/LiteLLM DB (`~/.cachelane-smoke`)
+
+Tools: `cachelane_stats`, `cachelane_explain`, `cachelane_health`, `cachelane_expand`, `cachelane_retrieve_tool_output`.
+
+Ask CC: "use cachelane-pi cachelane_stats with scope all" for Pi savings.
+
+### What good looks like
+- **Savings ratio** rising on multi-turn sessions (Pi smoke already ~45% overall).
+- **Cache hit ratio** >0 on later turns of the same session.
+- **Tokens reclaimed by pruning** grows on long tool-heavy chats.
+- **Pipeline fallback turns**: counts turns with `request_mutated=0` (includes short
+  probes with nothing to prune — not always an error). Prefer session-level
+  `sessions` / HTML report for real multi-turn quality.
+- Health: `node /srv/cachelane/scripts/health-dual.mjs` both paths listen.
+
+### Live numbers (2026-07-17)
+- Pi/LiteLLM: **97 turns, 30.2% cache hit, 45.4% savings, 39.5k tokens reclaimed**
+- Claude Code: probe-only so far (need real multi-turn CC sessions for savings)
+

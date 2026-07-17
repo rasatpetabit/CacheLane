@@ -116,3 +116,4 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 - 2026-07-17: production runtime `/srv/cachelane`; dual units smoke:7332→LiteLLM + anthropic:7333→api.anthropic.com; CLI honors config proxy.port; health-dual.mjs green.
 - 2026-07-17: CC live OAuth via :7333 verified; `cachelane install` MCP+hooks; Pi flushCompactionQueue streaming-safe patch applied (global + pi-fork dist).
 - 2026-07-17: rollout COMPLETE — install-runtime.sh, rollback-client-config.sh, linger enabled, health-dual green; soak skipped.
+- 2026-07-17: MCP dual servers (cachelane + cachelane-pi); hooks drop deprecated hook-mutate; stats-dual.mjs + HTML reports; flushCompactionQueue already streaming-safe.
