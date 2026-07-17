@@ -53,6 +53,8 @@ describe("formatStats", () => {
         "Baseline cost units: 120.00",
         "Savings ratio: 16.3%",
         "Pruned blocks: 4",
+        "Prune actions (cumulative): 4",
+        "Prune actions are cumulative; the same logical block can be pruned again on a later turn.",
         "Tokens reclaimed by pruning: 0",
         "Keepalive pings: 5",
         "Estimated compression tokens saved: 0",
