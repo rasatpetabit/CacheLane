@@ -209,15 +209,35 @@ export function openDatabase(dbPath: string): CachelaneDb {
        @is_pinned, @token_count, @added_at_turn, @last_referenced_at_turn,
        @unused_turns, @is_stub, @stub_summary, @refetch_handle,
        @restored_at_turn, @created_at, @updated_at)
-    ON CONFLICT(id) DO UPDATE SET
+    ON CONFLICT(session_id, id) DO UPDATE SET
       content_hash = excluded.content_hash,
-      token_count = excluded.token_count,
-      is_stub = excluded.is_stub,
-      stub_summary = excluded.stub_summary,
+      -- Preserve stub state when re-extracting the same tool content after
+      -- prune (clients re-send full tool bodies every turn). Only clear
+      -- is_stub when content actually changes (new tool result).
+      token_count = CASE
+        WHEN blocks.is_stub = 1 AND blocks.content_hash = excluded.content_hash
+          THEN blocks.token_count
+        ELSE excluded.token_count
+      END,
+      is_stub = CASE
+        WHEN blocks.is_stub = 1 AND blocks.content_hash = excluded.content_hash
+          THEN 1
+        ELSE excluded.is_stub
+      END,
+      stub_summary = CASE
+        WHEN blocks.is_stub = 1 AND blocks.content_hash = excluded.content_hash
+          THEN blocks.stub_summary
+        ELSE excluded.stub_summary
+      END,
+      last_referenced_at_turn = excluded.last_referenced_at_turn,
       updated_at = excluded.updated_at
   `);
 
-  const getBlockStmt = rawDb.prepare("SELECT * FROM blocks WHERE id = ?");
+  // Prefer session-scoped lookup; bare id is best-effort for legacy callers/tests.
+  const getBlockStmt = rawDb.prepare("SELECT * FROM blocks WHERE id = ? LIMIT 1");
+  const getBlockInSessionStmt = rawDb.prepare(
+    "SELECT * FROM blocks WHERE session_id = ? AND id = ?",
+  );
 
   const incrementUnusedTurnsStmt = rawDb.prepare(
     "UPDATE blocks SET unused_turns = unused_turns + 1, updated_at = ? WHERE id = ?"
@@ -232,6 +252,9 @@ export function openDatabase(dbPath: string): CachelaneDb {
   );
 
   const markStubStmt = rawDb.prepare(
+    "UPDATE blocks SET is_stub = 1, refetch_handle = ?, stub_summary = ?, token_count = ?, restored_at_turn = NULL, updated_at = ? WHERE session_id = ? AND id = ?"
+  );
+  const markStubByIdOnlyStmt = rawDb.prepare(
     "UPDATE blocks SET is_stub = 1, refetch_handle = ?, stub_summary = ?, token_count = ?, restored_at_turn = NULL, updated_at = ? WHERE id = ?"
   );
 
@@ -475,8 +498,12 @@ export function openDatabase(dbPath: string): CachelaneDb {
       restored_at_turn: p.restored_at_turn,
     });
 
-  db.getBlock = (id: string) =>
-    (getBlockStmt.get(id) as BlockRow | undefined) ?? null;
+  db.getBlock = (id: string, sessionId?: string) => {
+    if (sessionId) {
+      return (getBlockInSessionStmt.get(sessionId, id) as BlockRow | undefined) ?? null;
+    }
+    return (getBlockStmt.get(id) as BlockRow | undefined) ?? null;
+  };
 
   db.getPrunableBlocks = (p: GetPrunableBlocksParams) =>
     getPrunableBlocksStmt.all(p) as BlockRow[];
@@ -498,13 +525,20 @@ export function openDatabase(dbPath: string): CachelaneDb {
     refetchHandle: string,
     stubSummary: string | null,
     tokenCount: number,
-    updatedAt: number
-  ) => void markStubStmt.run(refetchHandle, stubSummary, tokenCount, updatedAt, id);
+    updatedAt: number,
+    sessionId?: string,
+  ) => {
+    if (sessionId) {
+      void markStubStmt.run(refetchHandle, stubSummary, tokenCount, updatedAt, sessionId, id);
+    } else {
+      void markStubByIdOnlyStmt.run(refetchHandle, stubSummary, tokenCount, updatedAt, id);
+    }
+  };
 
   db.markStubs = rawDb.transaction(
     (items: Array<{ id: string; workspace_id: string; session_id: string; refetchHandle: string; stubSummary: string | null; tokenCount: number; updatedAt: number }>) => {
-      for (const { id, refetchHandle, stubSummary, tokenCount, updatedAt } of items) {
-        markStubStmt.run(refetchHandle, stubSummary, tokenCount, updatedAt, id);
+      for (const { id, session_id, refetchHandle, stubSummary, tokenCount, updatedAt } of items) {
+        markStubStmt.run(refetchHandle, stubSummary, tokenCount, updatedAt, session_id, id);
       }
     },
   ) as (items: Array<{ id: string; workspace_id: string; session_id: string; refetchHandle: string; stubSummary: string | null; tokenCount: number; updatedAt: number }>) => void;

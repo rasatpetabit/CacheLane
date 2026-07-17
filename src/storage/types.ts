@@ -163,19 +163,13 @@ export interface SessionSummaryRow {
 export interface CachelaneDb extends Database.Database {
   listSessions(workspaceId?: string): SessionSummaryRow[];
   insertBlock(params: InsertBlockParams): void;
-  getBlock(id: string): BlockRow | null;
+  getBlock(id: string, sessionId?: string): BlockRow | null;
   getPrunableBlocks(params: GetPrunableBlocksParams): BlockRow[];
   getBlocksByIdPrefix(params: GetBlocksByIdPrefixParams): BlockRow[];
   incrementUnusedTurns(id: string, updatedAt: number): void;
   resetUnusedTurns(id: string, lastReferencedAtTurn: number, updatedAt: number): void;
   getBlocksBySession(workspaceId: string, sessionId: string): BlockRow[];
-  markStub(
-    id: string,
-    refetchHandle: string,
-    stubSummary: string | null,
-    tokenCount: number,
-    updatedAt: number
-  ): void;
+  markStub(id: string, refetchHandle: string, stubSummary: string | null, tokenCount: number, updatedAt: number, sessionId?: string): void;
   markStubs(items: Array<{ id: string; workspace_id: string; session_id: string; refetchHandle: string; stubSummary: string | null; tokenCount: number; updatedAt: number }>): void;
   restoreStub(params: RestoreStubParams): void;
   allocateTurnNumber(params: AllocateTurnNumberParams): number;

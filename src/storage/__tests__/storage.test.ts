@@ -881,4 +881,80 @@ describe("openDatabase", () => {
 
     expect(rows).toHaveLength(0);
   });
+
+  it("allows the same tool_call_id in two sessions (session-scoped PK)", () => {
+    db = openDatabase(path.join(tmpDir, "test.db"));
+    const base = {
+      workspace_id: "ws",
+      content_hash: "hash-a",
+      kind: "tool_output" as const,
+      volatility: "VOLATILE" as const,
+      is_pinned: false,
+      token_count: 100,
+      added_at_turn: 1,
+      last_referenced_at_turn: 1,
+      unused_turns: 0,
+      is_stub: false,
+      stub_summary: null as string | null,
+      refetch_handle: JSON.stringify({ type: "tool_call", id: "call_shared" }),
+      restored_at_turn: null as number | null,
+      created_at: 1,
+      updated_at: 1,
+    };
+    db.insertBlock({ ...base, id: "call_shared", session_id: "sess-a", content_hash: "hash-a", token_count: 100 });
+    db.insertBlock({ ...base, id: "call_shared", session_id: "sess-b", content_hash: "hash-b", token_count: 200 });
+    expect(db.getBlock("call_shared", "sess-a")?.token_count).toBe(100);
+    expect(db.getBlock("call_shared", "sess-b")?.token_count).toBe(200);
+    expect(db.getBlocksBySession("ws", "sess-a")).toHaveLength(1);
+    expect(db.getBlocksBySession("ws", "sess-b")).toHaveLength(1);
+  });
+
+  it("preserves is_stub on re-insert of the same content_hash", () => {
+    db = openDatabase(path.join(tmpDir, "test.db"));
+    db.insertBlock({
+      id: "call_stub",
+      workspace_id: "ws",
+      session_id: "sess",
+      content_hash: "same-hash",
+      kind: "tool_output",
+      volatility: "VOLATILE",
+      is_pinned: false,
+      token_count: 5000,
+      added_at_turn: 1,
+      last_referenced_at_turn: 1,
+      unused_turns: 0,
+      is_stub: false,
+      stub_summary: null,
+      refetch_handle: JSON.stringify({ type: "tool_call", id: "call_stub" }),
+      restored_at_turn: null,
+      created_at: 1,
+      updated_at: 1,
+    });
+    db.markStub("call_stub", JSON.stringify({ type: "tool_call", id: "call_stub" }), "stub", 12, 2, "sess");
+    expect(db.getBlock("call_stub", "sess")?.is_stub).toBe(1);
+    // re-extract full body with same hash (client re-sends tool content)
+    db.insertBlock({
+      id: "call_stub",
+      workspace_id: "ws",
+      session_id: "sess",
+      content_hash: "same-hash",
+      kind: "tool_output",
+      volatility: "VOLATILE",
+      is_pinned: false,
+      token_count: 5000,
+      added_at_turn: 3,
+      last_referenced_at_turn: 3,
+      unused_turns: 0,
+      is_stub: false,
+      stub_summary: null,
+      refetch_handle: JSON.stringify({ type: "tool_call", id: "call_stub" }),
+      restored_at_turn: null,
+      created_at: 3,
+      updated_at: 3,
+    });
+    const row = db.getBlock("call_stub", "sess");
+    expect(row?.is_stub).toBe(1);
+    expect(row?.token_count).toBe(12);
+  });
+
 });

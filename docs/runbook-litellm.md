@@ -201,9 +201,10 @@ Watch for: error rate, prune_fire_turns growth, baseline_turns (should stay ~0 o
 
 1. ~~Shadow / live pruning / Pi repoint / default grok flip~~ — **done**.
 2. **Complete 7-day soak** — review `soak/snapshots.jsonl`; rollback drill once.
-3. Schema follow-ups before multi-client: session-scoped `blocks.id`; stop extract UPSERT
-   clearing `is_stub`.
-4. Optional Pi core: make `flushCompactionQueue` streaming-safe (`ALLOW_PI_MODIFICATION`).
+3. ~~Schema follow-ups~~ — **done** (`012_session_scoped_blocks`: PK `(session_id,id)`;
+   UPSERT preserves `is_stub` when content_hash unchanged).
+4. **Complete 7-day soak** + rollback drill.
+5. Optional Pi core: make `flushCompactionQueue` streaming-safe (`ALLOW_PI_MODIFICATION`).
 
 
 ## Pi litellm baseUrl repoint (2026-07-17)
