@@ -10,11 +10,17 @@ Status (2026-07-17, epyc2):
 | Canaries (option 3, shadow) | **PASSED** 2026-07-17 — grok-4.5 / streaming / long context / multi-turn prune estimates |
 | Live pruning (`mutation_enabled=true`) | **ON + canary-verified** 2026-07-17 on smoke instance |
 | Live Pi `litellm.baseUrl` repoint | **DONE** 2026-07-17 — `http://127.0.0.1:7332/v1` |
+| Coverage audit | **DONE** 2026-07-17 — 7/11 enabledModels through CacheLane |
+| 7-day soak | **STARTED** 2026-07-17T04:41:23Z — timer every 6h |
 
 ## Topology
 
 ```
-canary/curl → CacheLane 127.0.0.1:7332 → LiteLLM 192.168.109.71:4000 (noauth) → provider
+Pi litellm/*  ──┐
+canary/curl   ──┼→ CacheLane 127.0.0.1:7332 → LiteLLM 192.168.109.71:4000 → provider
+                │
+xai-auth/grok-4.5  → (direct, bypasses CacheLane)
+openai-codex/*     → (Responses API, bypasses CacheLane)
 ```
 
 Shadow semantics: proxy still intercepts, classifies, ages tool blocks, and records
@@ -121,16 +127,55 @@ Artifact: `/tmp/cachelane-canary-live.json`.
 
 Rollback to shadow: set `mutation_enabled=false` in `~/.cachelane-smoke/config.json` (hot).
 
+
+## Coverage audit (2026-07-17)
+
+`~/.pi/agent/settings.json` `enabledModels` vs CacheLane hop:
+
+| Path | Models | CacheLane? |
+|---|---|---|
+| `litellm/*` | opus-4.8, qwen36-27b, sonnet-5, fable-5, glm-5.2, gpt-5.6, gpt-5.6-sol | **yes** (baseUrl → :7332) |
+| `openai-codex/*` | gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna | no (Responses API; intentional) |
+| `xai-auth/*` | **default** `grok-4.5` | no |
+
+Coverage of *enabled* models: **7/11 (64%)** through CacheLane.
+Default session model (`xai-auth/grok-4.5`) **bypasses** CacheLane even though LiteLLM
+catalog lists `grok-4.5`. To put default traffic through CacheLane would require either:
+
+1. Add `grok-4.5` under `providers.litellm.models` and switch default to `litellm/grok-4.5`, or
+2. Point `xai-auth` baseUrl through CacheLane (only if that provider speaks OpenAI chat).
+
+Neither default flip is done — needs explicit go-ahead (changes every new Pi session).
+
+## 7-day soak (started 2026-07-17T04:41:23Z)
+
+| Item | Value |
+|---|---|
+| Start marker | `~/.cachelane-smoke/soak/START` |
+| Snapshots | `~/.cachelane-smoke/soak/snapshots.jsonl` |
+| Script | `scripts/soak-snapshot.mjs` |
+| Timer | `cachelane-soak-snapshot.timer` (every 6h, user unit) |
+| Day-0 baseline | 79 turns, 27 sessions, 13 prune-fire turns, ~39.5k tokens_reclaimed recorded |
+
+```bash
+CACHELANE_HOME=~/.cachelane-smoke node scripts/soak-snapshot.mjs --label manual
+systemctl --user list-timers | rg cachelane
+# rollback still: restore models.json.bak-pre-cachelane-20260717T043930Z
+```
+
+Watch for: error rate, prune_fire_turns growth, baseline_turns (should stay ~0 on new live traffic),
+`blocks.id` collisions across sessions, agent completion failures on long tool-heavy chats.
+
 ## Next gates (do NOT skip)
 
-1. ~~Shadow soak / live pruning~~ — **done** on smoke.
-2. ~~Pi litellm baseUrl repoint~~ — **done** 2026-07-17 (see below).
-3. **Model-routing consolidation audit** — measure coverage % (litellm vs openai-codex
-   vs xai-auth); decide whether default `grok-4.5` stays on `xai-auth` or moves to
-   `litellm/grok-4.5` so default traffic also hits CacheLane.
-4. **7-day soak** with K-prune metrics + rollback drill.
-5. Follow-ups before broad multi-client: `blocks.id` session-scoped PK; stop extract
-   UPSERT from clearing `is_stub`.
+1. ~~Shadow / live pruning / Pi repoint~~ — **done**.
+2. ~~Coverage audit + soak start~~ — **done** (day 0 baseline taken).
+3. **Optional: put default grok through CacheLane** — add `litellm/grok-4.5` + flip
+   `defaultModel` (explicit confirm; changes every new session).
+4. **Complete 7-day soak** — review `soak/snapshots.jsonl` daily; rollback drill once.
+5. Schema follow-ups before multi-client: session-scoped `blocks.id`; stop extract UPSERT
+   clearing `is_stub`.
+
 
 ## Pi litellm baseUrl repoint (2026-07-17)
 

@@ -23,6 +23,8 @@
   repointed** to `http://127.0.0.1:7332/v1` (backup
   `models.json.bak-pre-cachelane-20260717T043930Z`). Default `xai-auth/grok-4.5`
   and `openai-codex/*` still bypass CacheLane. Details: `docs/runbook-litellm.md`.
+- 2026-07-17: coverage audit 7/11 enabledModels through CacheLane; 7-day soak
+  started (`soak/START`, `cachelane-soak-snapshot.timer` every 6h).
 
 ## 1. What CacheLane actually does (mechanism split)
 
