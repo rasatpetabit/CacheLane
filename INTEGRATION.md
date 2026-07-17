@@ -114,3 +114,4 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 - 2026-07-17: all non-dispatch LiteLLM models enabled on Pi via CacheLane :7332; openai-codex kept as Pi GPT backup; Claude Code uses separate CacheLane :7333 → api.anthropic.com (NOT LiteLLM); soak skipped.
 - 2026-07-17: `cachelane-anthropic.service` on :7333 (CACHELANE_HOME=~/.cachelane, upstream Anthropic). CC `ANTHROPIC_BASE_URL=http://127.0.0.1:7333`.
 - 2026-07-17: production runtime `/srv/cachelane`; dual units smoke:7332→LiteLLM + anthropic:7333→api.anthropic.com; CLI honors config proxy.port; health-dual.mjs green.
+- 2026-07-17: CC live OAuth via :7333 verified; `cachelane install` MCP+hooks; Pi flushCompactionQueue streaming-safe patch applied (global + pi-fork dist).

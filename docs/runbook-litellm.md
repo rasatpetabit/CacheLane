@@ -242,10 +242,13 @@ CLI note: `cachelane proxy` now reads `proxy.port` from config when `--port` is 
 1. ~~Shadow / live pruning / Pi repoint / full litellm catalog / dual CC path~~ — **done**.
 2. ~~Schema 012 / CLI config port / `/srv/cachelane` install~~ — **done**.
 3. ~~Soak~~ — **skipped** (operator).
-4. **CC live auth** — confirm Claude Code session with a valid Anthropic credential
-   through `:7333` (probe shows Anthropic 401 with bad key; path is correct).
-5. Optional: Pi core `flushCompactionQueue` streaming-safe (`ALLOW_PI_MODIFICATION`).
-6. Optional: `cachelane install` MCP registration for Claude Code (stats tools).
+4. ~~**CC live auth**~~ — **done**. Claude Max OAuth (`claudeAiOauth` Bearer) through
+   `:7333` returns PONG; turns recorded in `~/.cachelane/cachelane.db`.
+   (Shell `ANTHROPIC_API_KEY` is stale/invalid — CC uses OAuth, not that key.)
+5. ~~**cachelane install** for CC~~ — **done**. MCP + hooks registered; doctor green;
+   `CACHELANE_HOME=~/.cachelane`, base URL still `:7333` → Anthropic (not LiteLLM).
+6. ~~**Pi core flushCompactionQueue streaming-safe**~~ — **done** (user authorized "do all 3").
+   Patched installed package + `/srv/dev/ai/pi-fork` dist; bare-prompt avoided when busy.
 
 
 ## Pi litellm baseUrl repoint (2026-07-17)
