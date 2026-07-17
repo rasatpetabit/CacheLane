@@ -3,8 +3,8 @@
  * CacheLane soak snapshot — append one JSON line of aggregate metrics.
  *
  * Usage:
- *   CACHELANE_HOME=~/.cachelane-openai node scripts/soak-snapshot.mjs
- *   CACHELANE_HOME=~/.cachelane-openai node scripts/soak-snapshot.mjs --label day0-baseline
+ *   CACHELANE_HOME=~/.cachelane-litellm node scripts/soak-snapshot.mjs
+ *   CACHELANE_HOME=~/.cachelane-litellm node scripts/soak-snapshot.mjs --label day0-baseline
  *
  * Writes: $CACHELANE_HOME/soak/snapshots.jsonl
  * Prints: the same object to stdout (pretty).

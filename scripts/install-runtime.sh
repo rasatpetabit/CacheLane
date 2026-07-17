@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install CacheLane runtime into /srv/cachelane and (re)write hardened *system* units.
 # Units:
-#   cachelane-openai  :7332 → LiteLLM (OpenAI-compat; Pi / agent-dispatch / skynet)
+#   cachelane-litellm  :7332 → LiteLLM (LiteLLM upstream; Pi / agent-dispatch / skynet)
 #   cachelane-claude  :7333 → api.anthropic.com (Claude Code)
 set -euo pipefail
 
@@ -22,20 +22,20 @@ git -C "$REPO_ROOT" rev-parse HEAD | sudo tee "$INSTALL/GIT_SHA" >/dev/null
 date -u +%Y-%m-%dT%H:%M:%SZ | sudo tee "$INSTALL/INSTALLED_AT" >/dev/null
 
 # Home dirs (canonical names + back-compat symlinks)
-HOME_OPENAI="${CACHELANE_OPENAI_HOME:-$HOME/.cachelane-openai}"
+HOME_LITELLM="${CACHELANE_LITELLM_HOME:-$HOME/.cachelane-litellm}"
 HOME_CLAUDE="${CACHELANE_CLAUDE_HOME:-$HOME/.cachelane-claude}"
-mkdir -p "$HOME_OPENAI" "$HOME_CLAUDE"
+mkdir -p "$HOME_LITELLM" "$HOME_CLAUDE"
 # legacy names
-[[ -e "$HOME/.cachelane-smoke" ]] || ln -sfn "$(basename "$HOME_OPENAI")" "$HOME/.cachelane-smoke"
+[[ -e "$HOME/.cachelane-smoke" ]] || ln -sfn "$(basename "$HOME_LITELLM")" "$HOME/.cachelane-smoke"
 if [[ -d "$HOME/.cachelane" && ! -L "$HOME/.cachelane" && "$HOME/.cachelane" -ef "$HOME_CLAUDE" ]]; then
   : # already same
 elif [[ ! -e "$HOME/.cachelane" ]]; then
   ln -sfn "$(basename "$HOME_CLAUDE")" "$HOME/.cachelane"
 fi
 
-sudo tee "$UNIT_DIR/cachelane-openai.service" >/dev/null <<UNIT
+sudo tee "$UNIT_DIR/cachelane-litellm.service" >/dev/null <<UNIT
 [Unit]
-Description=CacheLane OpenAI-compat proxy (:7332 → LiteLLM)
+Description=CacheLane LiteLLM proxy (:7332 → LiteLLM)
 Documentation=file:///srv/dev/ai/cachelane/docs/runbook-litellm.md
 After=network-online.target litellm.service litellm-gateway-proxy.service
 Wants=network-online.target
@@ -45,7 +45,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=$USER
 Group=$USER
-Environment=CACHELANE_HOME=$HOME_OPENAI
+Environment=CACHELANE_HOME=$HOME_LITELLM
 Environment=HOME=$HOME
 WorkingDirectory=$INSTALL
 ExecStart=/usr/bin/node dist/cli/index.cjs proxy
@@ -55,7 +55,7 @@ TimeoutStopSec=15
 KillMode=mixed
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$HOME_OPENAI $HOME/.cachelane-smoke
+ReadWritePaths=$HOME_LITELLM $HOME/.cachelane-smoke
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
@@ -114,7 +114,7 @@ set -euo pipefail
 LOG_TAG=cachelane-healthcheck
 fail=0
 probe_tcp() { timeout 2 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
-probe_openai() { curl -sf -m 3 -H 'Authorization: Bearer noauth' http://127.0.0.1:7332/v1/models >/dev/null; }
+probe_litellm() { curl -sf -m 3 -H 'Authorization: Bearer noauth' http://127.0.0.1:7332/v1/models >/dev/null; }
 probe_claude() {
   local code
   code=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' \
@@ -135,7 +135,7 @@ check_one() {
     systemctl restart "$name" || true; fail=$((fail+1)); return
   fi
 }
-check_one cachelane-openai.service 7332 probe_openai
+check_one cachelane-litellm.service 7332 probe_litellm
 check_one cachelane-claude.service 7333 probe_claude
 [[ "$fail" -eq 0 ]]
 HEALTH
@@ -144,7 +144,7 @@ sudo chmod 755 /usr/local/sbin/cachelane-healthcheck
 sudo tee "$UNIT_DIR/cachelane-healthcheck.service" >/dev/null <<'UNIT'
 [Unit]
 Description=CacheLane dual-proxy healthcheck (restart on failure)
-After=cachelane-openai.service cachelane-claude.service
+After=cachelane-litellm.service cachelane-claude.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/cachelane-healthcheck
@@ -166,8 +166,8 @@ UNIT
 systemctl --user disable --now cachelane-smoke.service cachelane-anthropic.service 2>/dev/null || true
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now cachelane-openai.service cachelane-claude.service cachelane-healthcheck.timer
-sudo systemctl restart cachelane-openai.service cachelane-claude.service
+sudo systemctl enable --now cachelane-litellm.service cachelane-claude.service cachelane-healthcheck.timer
+sudo systemctl restart cachelane-litellm.service cachelane-claude.service
 sleep 1
 node "$INSTALL/scripts/health-dual.mjs"
 echo "installed $(cat "$INSTALL/GIT_SHA") at $(cat "$INSTALL/INSTALLED_AT")"

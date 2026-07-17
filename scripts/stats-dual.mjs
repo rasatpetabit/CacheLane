@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Show CacheLane stats for both production homes:
- *   OpenAI→LiteLLM  → ~/.cachelane-openai (:7332)
+ *   LiteLLM  → ~/.cachelane-litellm (:7332)
  *   Claude Code → ~/.cachelane       (:7333 → Anthropic)
  */
 import { spawnSync } from "node:child_process";
@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 const cli = process.env.CACHELANE_CLI ?? "/srv/cachelane/dist/cli/index.cjs";
 const homes = [
-  { name: "OpenAI → LiteLLM (:7332)", home: join(homedir(), ".cachelane-openai") },
+  { name: "LiteLLM (:7332)", home: join(homedir(), ".cachelane-litellm") },
   { name: "Claude → Anthropic (:7333)", home: join(homedir(), ".cachelane-claude") },
 ];
 
@@ -29,7 +29,7 @@ for (const h of homes) {
   const sessions = run(h.home, ["sessions"]).trim().split("\n").slice(0, 12).join("\n");
   console.log(sessions);
 }
-console.log(`\nHTML report (Pi):  CACHELANE_HOME=~/.cachelane-openai node ${cli} report --scope all --no-open`);
+console.log(`\nHTML report (Pi):  CACHELANE_HOME=~/.cachelane-litellm node ${cli} report --scope all --no-open`);
 console.log(`HTML report (CC):  CACHELANE_HOME=~/.cachelane-claude node ${cli} report --scope all --no-open`);
 console.log(`MCP tools in Claude Code: cachelane_stats, cachelane_explain, cachelane_health, cachelane_expand`);
-console.log(`  (server "cachelane" → CC home; server "cachelane-pi" → OpenAI→LiteLLM home)`);
+console.log(`  (server "cachelane" → CC home; server "cachelane-pi" → LiteLLM home)`);
