@@ -19,6 +19,10 @@
     onto upstream `a768b05`, not "572 tests")
 - 2026-07-16: rebased onto upstream `a768b05`; Phase 1a smoke PASSED
   (`docs/runbook-litellm.md`); Phase 2 (OpenAI K-pruning) implemented — see §4.
+- 2026-07-17: **shadow mode ON** (`mutation_enabled=false` on
+  `~/.cachelane-smoke`) + **option-3 canaries PASSED** (grok-4.5, streaming,
+  long context, multi-turn prune estimates). Live Pi `litellm.baseUrl` repoint
+  and live pruning still gated. Details: `docs/runbook-litellm.md`.
 
 ## 1. What CacheLane actually does (mechanism split)
 
