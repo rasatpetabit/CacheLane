@@ -9,7 +9,7 @@ Status (2026-07-17, epyc2):
 | Shadow mode | **PASSED** then graduated to live pruning |
 | Canaries (option 3, shadow) | **PASSED** 2026-07-17 — grok-4.5 / streaming / long context / multi-turn prune estimates |
 | Live pruning (`mutation_enabled=true`) | **ON + canary-verified** 2026-07-17 on smoke instance |
-| Live Pi `litellm.baseUrl` repoint | **NOT done** — separate confirmation required |
+| Live Pi `litellm.baseUrl` repoint | **DONE** 2026-07-17 — `http://127.0.0.1:7332/v1` |
 
 ## Topology
 
@@ -123,13 +123,52 @@ Rollback to shadow: set `mutation_enabled=false` in `~/.cachelane-smoke/config.j
 
 ## Next gates (do NOT skip)
 
-1. ~~Shadow soak / live pruning~~ — **done** on smoke (see above).
-2. **Pi repoint** (separate confirmation): `~/.pi/agent/models.json` litellm
-   `baseUrl` → `http://127.0.0.1:7332/v1` (upstream stays :4000). Rollback = one line.
-   Do **not** do this without an explicit go-ahead — it puts real Pi traffic through CacheLane.
-3. Model-routing consolidation audit + 7-day soak (plan Task #12).
-4. Follow-ups before broad multi-client: `blocks.id` session-scoped PK; stop extract
+1. ~~Shadow soak / live pruning~~ — **done** on smoke.
+2. ~~Pi litellm baseUrl repoint~~ — **done** 2026-07-17 (see below).
+3. **Model-routing consolidation audit** — measure coverage % (litellm vs openai-codex
+   vs xai-auth); decide whether default `grok-4.5` stays on `xai-auth` or moves to
+   `litellm/grok-4.5` so default traffic also hits CacheLane.
+4. **7-day soak** with K-prune metrics + rollback drill.
+5. Follow-ups before broad multi-client: `blocks.id` session-scoped PK; stop extract
    UPSERT from clearing `is_stub`.
+
+## Pi litellm baseUrl repoint (2026-07-17)
+
+| Field | Value |
+|---|---|
+| File | `~/.pi/agent/models.json` → `providers.litellm.baseUrl` |
+| Before | `http://192.168.109.71:4000/v1` |
+| After | `http://127.0.0.1:7332/v1` |
+| Backup | `~/.pi/agent/models.json.bak-pre-cachelane-20260717T043930Z` |
+| apiKey | unchanged (`noauth`) |
+| CacheLane upstream | still `192.168.109.71:4000` |
+
+Path now:
+
+```
+Pi (litellm/* models) → CacheLane 127.0.0.1:7332 → LiteLLM 192.168.109.71:4000 → provider
+```
+
+**Coverage note (not full fleet traffic):**
+- Routes **through** CacheLane: any model under `providers.litellm` (`litellm/qwen36-27b`,
+  `litellm/glm-5.2`, `litellm/gpt-5.6*`, `litellm/fable-5`, …).
+- Stays **outside** CacheLane: `defaultProvider=xai-auth` / `defaultModel=grok-4.5`,
+  and `openai-codex/*` (Responses API — no CacheLane adapter).
+- Existing Pi sessions keep the old baseUrl until restart; **new** sessions load the
+  repointed config.
+
+Verify (disposable):
+```bash
+# already ran: qwen36-27b + glm-5.2 via :7332 → 200, request_mutated=1
+CACHELANE_HOME=~/.cachelane-smoke node /srv/dev/ai/cachelane/dist/cli/index.cjs stats
+```
+
+**Rollback (one line):**
+```bash
+# restore backup, or:
+python3 -c "import json,pathlib;p=pathlib.Path.home()/'.pi/agent/models.json';d=json.loads(p.read_text());d['providers']['litellm']['baseUrl']='http://192.168.109.71:4000/v1';p.write_text(json.dumps(d,indent=2)+chr(10))"
+# then start a new Pi session
+```
 
 ## Ops notes
 

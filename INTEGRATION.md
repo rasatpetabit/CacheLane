@@ -19,10 +19,10 @@
     onto upstream `a768b05`, not "572 tests")
 - 2026-07-16: rebased onto upstream `a768b05`; Phase 1a smoke PASSED
   (`docs/runbook-litellm.md`); Phase 2 (OpenAI K-pruning) implemented — see §4.
-- 2026-07-17: shadow canaries PASSED, then **live pruning ON** on
-  `~/.cachelane-smoke` (`mutation_enabled=true`). Verified prompt-token collapse
-  at K=3 (qwen 3.2k→308, grok 6.3k→460) with `pruned:2` + `request_mutated=1`.
-  Pi `litellm.baseUrl` repoint still gated. Details: `docs/runbook-litellm.md`.
+- 2026-07-17: shadow canaries PASSED → live pruning ON → **Pi litellm baseUrl
+  repointed** to `http://127.0.0.1:7332/v1` (backup
+  `models.json.bak-pre-cachelane-20260717T043930Z`). Default `xai-auth/grok-4.5`
+  and `openai-codex/*` still bypass CacheLane. Details: `docs/runbook-litellm.md`.
 
 ## 1. What CacheLane actually does (mechanism split)
 
