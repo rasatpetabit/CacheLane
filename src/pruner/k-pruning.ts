@@ -37,10 +37,13 @@ export function pruneExpiredBlocks(
       stub_summary: stubSummary,
       refetch_handle: refetchHandle,
       kind: row.kind,
+      original_tokens: row.token_count,
+      stub_tokens: 0, // filled below once the stub text is rendered
     };
     const stubText = formatStubText(decision);
     const tokenCount = countTokens(stubText, "claude-3"); // Fallback multiplier is fine for stubs
-    
+    decision.stub_tokens = tokenCount;
+
     return { row, refetchHandle, stubSummary, tokenCount, decision };
   });
 

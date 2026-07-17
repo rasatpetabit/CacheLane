@@ -15,5 +15,10 @@ export type {
 } from "./types.js";
 
 export { pruneExpiredBlocks } from "./k-pruning.js";
-export { materializePrunedBlocks } from "./materialization.js";
+export {
+  materializePrunedBlocks,
+  materializePrunedBlocksOpenAI,
+  type OpenAIChatMessageLike,
+  type OpenAIMaterializableRequest,
+} from "./materialization.js";
 export { expandStub, markExpandedBlockRestored } from "./tools.js";

@@ -147,6 +147,8 @@ describe("pruneExpiredBlocks", () => {
       stub_summary: "tool_output tool:read:src/auth.ts (250 tokens elided)",
       refetch_handle: "tool:read:src/auth.ts",
       kind: "tool_output",
+      original_tokens: 250,
+      stub_tokens: 20,
     };
 
     expect(formatStubText(decision)).toBe(
@@ -185,6 +187,8 @@ describe("materializePrunedBlocks", () => {
           stub_summary: "tool_output tool:read:src/auth.ts (250 tokens elided)",
           refetch_handle: "tool:read:src/auth.ts",
           kind: "tool_output",
+          original_tokens: 250,
+          stub_tokens: 20,
         },
       ],
       block_placements: [
@@ -249,6 +253,8 @@ describe("materializePrunedBlocks", () => {
           stub_summary: "tool_output tool:read:src/auth.ts (250 tokens elided)",
           refetch_handle: "tool:read:src/auth.ts",
           kind: "tool_output",
+          original_tokens: 250,
+          stub_tokens: 20,
         },
       ],
       block_placements: [
@@ -295,6 +301,8 @@ describe("materializePrunedBlocks", () => {
             stub_summary: "summary",
             refetch_handle: "handle",
             kind: "tool_output",
+            original_tokens: 250,
+            stub_tokens: 20,
           },
         ],
         block_placements: [],

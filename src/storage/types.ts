@@ -237,6 +237,9 @@ export interface TurnExplanationPruneDecision {
   kind: BlockKind;
   stub_summary: string | null;
   has_refetch_handle: boolean;
+  /** Estimated tokens removed from the prompt: original block − stub text.
+   *  Absent on records written before this field existed. */
+  tokens_reclaimed?: number;
 }
 
 export interface TurnExplanationBlockMetadata {
@@ -408,6 +411,10 @@ export interface CachelaneStats {
   pruner_counts: {
     pruned_blocks: number;
     turns_with_pruning: number;
+    /** Σ (original − stub) tokens across materialized prune decisions.
+     *  savings_ratio can NOT show pruning value (prunes lower both baseline
+     *  and effective) — this figure is the measurable pruning win. */
+    tokens_reclaimed: number;
   };
   keepalive_counts: {
     pings: number;

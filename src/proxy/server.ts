@@ -17,8 +17,30 @@ import aws4 from "aws4";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { countCompressionTokens } from "../compressor/token-accounting.js";
 import { reconcileTurnCost } from "../reconciler/index.js";
+import {
+  pruneExpiredBlocks,
+  materializePrunedBlocksOpenAI,
+  type OpenAIMaterializableRequest,
+} from "../pruner/index.js";
 
+// Content-hash → token-count memo. Bounded: hashes are content-addressed and
+// long sessions accumulate unique tool outputs forever, so evict FIFO past the
+// cap instead of growing without limit.
 const tokenCache = new Map<string, number>();
+const TOKEN_CACHE_MAX_ENTRIES = 4096;
+
+function cachedTokenCount(contentHash: string, contentStr: string, model: string): number {
+  let tokenCount = tokenCache.get(contentHash);
+  if (tokenCount === undefined) {
+    tokenCount = countCompressionTokens(contentStr, model);
+    tokenCache.set(contentHash, tokenCount);
+    if (tokenCache.size > TOKEN_CACHE_MAX_ENTRIES) {
+      const oldest = tokenCache.keys().next().value;
+      if (oldest !== undefined) tokenCache.delete(oldest);
+    }
+  }
+  return tokenCount;
+}
 
 const DEFAULT_UPSTREAM_HOST = "api.anthropic.com";
 const DEFAULT_UPSTREAM_PORT = 443;
@@ -224,6 +246,37 @@ export function computeBlockPlacements(
   return placements;
 }
 
+// OpenAI chat: a pruned tool output is a whole role:"tool" message keyed by
+// tool_call_id (content_index is always 0 — the message content IS the block).
+export function computeBlockPlacementsOpenAI(
+  messages: Array<{ role?: unknown; tool_call_id?: unknown }>,
+  blocks: import("../storage/index.js").BlockRow[]
+): import("../pruner/index.js").PromptBlockPlacement[] {
+  const placements: import("../pruner/index.js").PromptBlockPlacement[] = [];
+  const blockMap = new Map(blocks.map(b => [b.id, b]));
+
+  for (let mIdx = 0; mIdx < messages.length; mIdx++) {
+    const msg = messages[mIdx]!;
+    if (msg.role === "tool" && typeof msg.tool_call_id === "string") {
+      const row = blockMap.get(msg.tool_call_id);
+      if (row) {
+        placements.push({
+          block_id: row.id,
+          message_index: mIdx,
+          content_index: 0,
+          kind: row.kind,
+          volatility: row.volatility,
+          is_pinned: row.is_pinned === 1,
+          refetch_handle: row.refetch_handle,
+          restored_at_turn: row.restored_at_turn,
+          token_count: row.token_count
+        });
+      }
+    }
+  }
+  return placements;
+}
+
 function classifyAllMessages(
   messages: AnthropicMessage[],
   currentTurn: number,
@@ -408,11 +461,54 @@ export function createProxyServer(
         // blocks, which OpenAI rejects with HTTP 400. Instead we apply OpenAI
         // cache hints (prompt_cache_key) via the adapter, skip keepalive
         // (cachePolicy.supportsKeepalive === false), and skip Bedrock signing
-        // (isBedrock is false for /v1/chat/completions). K-pruning for OpenAI is
-        // OUT OF SCOPE here (deferred to Task 7b) — extractAndInsertToolResults
-        // keys on Anthropic tool_result blocks, so it is a no-op for OpenAI.
+        // (isBedrock is false for /v1/chat/completions). K-pruning (Phase 2):
+        // idle role:"tool" messages (tracked by tool_call_id via the OpenAI
+        // extractor) are stubbed in place before cache-hinting. Fail-open:
+        // any pruning error forwards the request unpruned.
         if (adapter.name === "openai-chat") {
-          const normalized = adapter.normalizeRequest(parsed);
+          const oaiRequest = parsed as unknown as OpenAIMaterializableRequest;
+          let requestForHints: OpenAIMaterializableRequest = oaiRequest;
+          let prunedCount = 0;
+          let prunedDecisions: import("../pruner/index.js").PruneDecision[] = [];
+          let oaiPlacements: import("../pruner/index.js").PromptBlockPlacement[] = [];
+          if (config.features.k_pruner) {
+            try {
+              oaiPlacements = computeBlockPlacementsOpenAI(
+                oaiRequest.messages,
+                db.getBlocksBySession(workspaceId, sessionId),
+              );
+              const pruneResult = pruneExpiredBlocks(db, {
+                workspace_id: workspaceId,
+                session_id: sessionId,
+                k: config.pruner.k,
+                current_turn: currentTurn,
+                enabled: config.pruner.enabled,
+              });
+              const placementIds = new Set(oaiPlacements.map((p) => p.block_id));
+              const actionable = pruneResult.decisions.filter((d) =>
+                placementIds.has(d.block_id),
+              );
+              if (actionable.length > 0) {
+                requestForHints = materializePrunedBlocksOpenAI({
+                  request: oaiRequest,
+                  decisions: actionable,
+                  block_placements: oaiPlacements,
+                });
+                prunedCount = actionable.length;
+                prunedDecisions = actionable;
+              }
+            } catch (err) {
+              logger.error(
+                "openai k-pruning failed — forwarding unpruned",
+                err instanceof Error ? err.message : String(err),
+                err,
+              );
+              requestForHints = oaiRequest;
+              prunedCount = 0;
+              prunedDecisions = [];
+            }
+          }
+          const normalized = adapter.normalizeRequest(requestForHints);
           const prefixHash = createHash("sha256")
             .update(
               JSON.stringify({ system: normalized.system, tools: normalized.tools }),
@@ -429,7 +525,68 @@ export function createProxyServer(
             : body;
 
           const finalSignals = ["provider:openai-chat"];
+          if (prunedCount > 0) finalSignals.push(`pruned:${prunedCount}`);
           if (!config.features.mutation_enabled) finalSignals.push("mode:baseline");
+
+          // Turn explanation: makes `cachelane explain` work for OpenAI turns
+          // and carries per-decision tokens_reclaimed for the stats aggregate.
+          // Best-effort — never blocks the forward.
+          if (typeof db.insertTurnExplanation === "function") {
+            try {
+              const now = Date.now();
+              db.insertTurnExplanation({
+                turn_id: turnId,
+                workspace_id: workspaceId,
+                session_id: sessionId,
+                turn_number: currentTurn,
+                model: parsed.model,
+                prefix_breakpoint_hash: prefixHash,
+                middle_breakpoint_hash: null,
+                mutated: actuallyMutate,
+                pruned_blocks_count: prunedCount,
+                prune_decisions: prunedDecisions.map((decision) => ({
+                  block_id: decision.block_id,
+                  action: decision.action,
+                  reason: decision.reason,
+                  kind: decision.kind,
+                  stub_summary: decision.stub_summary,
+                  has_refetch_handle: decision.refetch_handle.length > 0,
+                  tokens_reclaimed: Math.max(
+                    decision.original_tokens - decision.stub_tokens,
+                    0,
+                  ),
+                })),
+                block_metadata: oaiPlacements.map((placement) => ({
+                  block_id: placement.block_id,
+                  message_index: placement.message_index,
+                  content_index: placement.content_index,
+                  kind: placement.kind,
+                  volatility: placement.volatility,
+                  is_pinned: placement.is_pinned,
+                  has_refetch_handle: placement.refetch_handle !== null,
+                  restored_at_turn: placement.restored_at_turn ?? null,
+                  token_count: placement.token_count,
+                })),
+                // No message classification on the OpenAI path — report all
+                // messages as VOLATILE rather than inventing regions.
+                region_metadata: {
+                  message_count: oaiRequest.messages.length,
+                  stable_count: 0,
+                  semi_count: 0,
+                  volatile_count: oaiRequest.messages.length,
+                },
+                signals: finalSignals,
+                created_at: now,
+                updated_at: now,
+              });
+            } catch (err) {
+              logger.error(
+                "openai turn explanation write failed",
+                err instanceof Error ? err.message : String(err),
+                err,
+              );
+            }
+          }
 
           if (actuallyMutate) {
             logger.info(
@@ -438,7 +595,7 @@ export function createProxyServer(
                 session: sessionId,
                 turn: currentTurn,
                 signals: finalSignals,
-                pruned: 0,
+                pruned: prunedCount,
               }),
             );
           }
@@ -460,7 +617,7 @@ export function createProxyServer(
             model: parsed.model,
             prefixHash,
             middleHash: null,
-            prunedCount: 0,
+            prunedCount,
             requestMutated: actuallyMutate ? 1 : 0,
             signals: finalSignals,
             // OpenAI cachePolicy.supportsKeepalive === false → no keepalive pings.
@@ -820,12 +977,18 @@ function recordUsageFromResponse(
     const cacheCreation1h = usage.cacheWrite1h;
     const cacheRead = usage.cacheRead;
 
-    const effective = calculateEffectiveCostUnits({
-      input_tokens: inputTokens,
-      cache_creation_5m_tokens: cacheCreation5m,
-      cache_creation_1h_tokens: cacheCreation1h,
-      cache_read_tokens: cacheRead,
-    });
+    // Cost math goes through the provider adapter's costModel — the Anthropic
+    // 0.1× cache-read discount is wrong for OpenAI-routed models (gpt-4o is
+    // 0.5×, gpt-4.1 is 0.25×). The Anthropic adapter's effectiveUnits wraps
+    // calculateEffectiveCostUnits, so Anthropic turns are unchanged.
+    const effective = adapter
+      ? adapter.costModel.effectiveUnits(usage, opts.model)
+      : calculateEffectiveCostUnits({
+        input_tokens: inputTokens,
+        cache_creation_5m_tokens: cacheCreation5m,
+        cache_creation_1h_tokens: cacheCreation1h,
+        cache_read_tokens: cacheRead,
+      });
 
     try {
       opts.db.insertTurn({
@@ -914,6 +1077,10 @@ function recordUsageFromResponse(
 }
 
 function extractAndInsertToolResults(body: Buffer, opts: RecordOptions): void {
+  if (opts.adapter?.name === "openai-chat") {
+    extractAndInsertToolResultsOpenAI(body, opts);
+    return;
+  }
   try {
     const req = JSON.parse(body.toString("utf-8")) as AnthropicMessagesRequest;
     if (!req.messages || !Array.isArray(req.messages)) return;
@@ -932,13 +1099,8 @@ function extractAndInsertToolResults(body: Buffer, opts: RecordOptions): void {
           if (c.type === "tool_result" && c.tool_use_id) {
             const contentStr = typeof c.content === "string" ? c.content : JSON.stringify(c.content);
             const contentHash = createHash("sha256").update(contentStr).digest("hex");
-            
-            let tokenCount = tokenCache.get(contentHash);
-            if (tokenCount === undefined) {
-              tokenCount = countCompressionTokens(contentStr, opts.model);
-              tokenCache.set(contentHash, tokenCount);
-            }
-            
+            const tokenCount = cachedTokenCount(contentHash, contentStr, opts.model);
+
             try {
               opts.db.insertBlock({
                 id: c.tool_use_id,
@@ -970,6 +1132,62 @@ function extractAndInsertToolResults(body: Buffer, opts: RecordOptions): void {
     }
   } catch (err) {
     logger.error("failed to extract tool_result blocks", String(err), err);
+  }
+}
+
+// OpenAI chat: tool outputs are whole role:"tool" messages keyed by
+// tool_call_id. Mirrors the Anthropic extractor — one block row per tool
+// output, so the K-pruner ages and stubs them identically across providers.
+function extractAndInsertToolResultsOpenAI(body: Buffer, opts: RecordOptions): void {
+  try {
+    const req = JSON.parse(body.toString("utf-8")) as {
+      messages?: Array<{ role?: unknown; tool_call_id?: unknown; content?: unknown }>;
+    };
+    if (!req.messages || !Array.isArray(req.messages)) return;
+
+    opts.db.updateBlockCounters({
+      workspace_id: opts.workspaceId,
+      session_id: opts.sessionId,
+      turn_number: opts.currentTurn,
+      referenced_ids: new Set(),
+      updated_at: Date.now(),
+    });
+
+    for (const msg of req.messages) {
+      if (msg.role !== "tool" || typeof msg.tool_call_id !== "string") continue;
+      const contentStr =
+        typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? "");
+      const contentHash = createHash("sha256").update(contentStr).digest("hex");
+      const tokenCount = cachedTokenCount(contentHash, contentStr, opts.model);
+
+      try {
+        opts.db.insertBlock({
+          id: msg.tool_call_id,
+          workspace_id: opts.workspaceId,
+          session_id: opts.sessionId,
+          content_hash: contentHash,
+          kind: "tool_output",
+          volatility: "VOLATILE",
+          is_pinned: false,
+          token_count: tokenCount,
+          added_at_turn: opts.currentTurn,
+          last_referenced_at_turn: opts.currentTurn,
+          unused_turns: 0,
+          is_stub: false,
+          stub_summary: null,
+          refetch_handle: JSON.stringify({ type: "tool_call", id: msg.tool_call_id }),
+          restored_at_turn: null,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+        });
+      } catch (err) {
+        if (!(err instanceof Error && err.message.includes("UNIQUE"))) {
+          logger.error("failed to insert openai tool block", String(err), err);
+        }
+      }
+    }
+  } catch (err) {
+    logger.error("failed to extract openai tool messages", String(err), err);
   }
 }
 

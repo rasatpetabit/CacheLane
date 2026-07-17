@@ -17,6 +17,10 @@ export interface PruneDecision {
   stub_summary: string;
   refetch_handle: string;
   kind: BlockKind;
+  /** Token count of the original block content (before stubbing). */
+  original_tokens: number;
+  /** Token count of the stub text that replaces it. */
+  stub_tokens: number;
 }
 
 export interface PruneResult {

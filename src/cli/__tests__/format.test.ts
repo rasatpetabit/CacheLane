@@ -18,6 +18,7 @@ describe("formatStats", () => {
       pruner_counts: {
         pruned_blocks: 4,
         turns_with_pruning: 2,
+        tokens_reclaimed: 0,
       },
       keepalive_counts: {
         pings: 5,
@@ -41,6 +42,7 @@ describe("formatStats", () => {
         "Baseline cost units: 120.00",
         "Savings ratio: 16.3%",
         "Pruned blocks: 4",
+        "Tokens reclaimed by pruning: 0",
         "Keepalive pings: 5",
         "Estimated compression tokens saved: 0",
       ].join("\n")

@@ -13,7 +13,8 @@ const data: ReportData = {
     scope: "workspace", workspace_id: "ws", session_id: null, since_ms: null,
     turns: 2, cache_hit_ratio: 0.4, effective_cost_units: 128, baseline_cost_units: 300,
     savings_ratio: 0.573, pipeline_fallback_turns: 0,
-    pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0 },
+    pruner_counts: { pruned_blocks: 0, tokens_reclaimed: 0,
+    turns_with_pruning: 0 },
     keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
     compression_counts: {
       compressed_blocks: 2,

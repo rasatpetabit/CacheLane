@@ -9,12 +9,16 @@
 - Fork created at `/srv/dev/ai/cachelane` from upstream `813a0bd`.
 - Remote `upstream` → `https://github.com/Aditya-Tripuraneni/CacheLane.git` (no `origin` yet — add when we publish our own).
 - Branch: `headroom-litellm-integration`.
-- Baseline on Node 20.20.2 (`.nvmrc` = 20; better-sqlite3 needs it):
+- Baseline on Node 20.20.2 (`.nvmrc` = 20). CORRECTION 2026-07-16: Node
+  22.22.1 builds and tests cleanly (better-sqlite3 compiles) — the Node 20 pin
+  is obsolete.
   - `npm ci` ✅ (488 pkgs)
   - `npm run build` ✅
   - `npx tsc --noEmit` ✅
-  - `npm test` ✅ **572 passed / 2 skipped / 0 failed**
-- Unchanged from upstream except this document.
+  - `npm test` ✅ (CORRECTION: ~573 cases / 72 files at the 2026-07-16 rebase
+    onto upstream `a768b05`, not "572 tests")
+- 2026-07-16: rebased onto upstream `a768b05`; Phase 1a smoke PASSED
+  (`docs/runbook-litellm.md`); Phase 2 (OpenAI K-pruning) implemented — see §4.
 
 ## 1. What CacheLane actually does (mechanism split)
 
@@ -32,7 +36,7 @@
 
 - `src/providers/types.ts` — `ProviderAdapter` interface (9 methods). The pluggable I/O boundary. Already models tier-less/implicit-cache providers.
 - `src/providers/registry.ts` — `selectAdapter(method, path)` routes by URL. Add a litellm-aware route here if needed.
-- `src/providers/{anthropic-messages,openai-chat}.ts` — the two shipped adapters. `applyCacheHints` is currently a **stub** with comment *"breakpoint placement stays in the existing mutator pipeline for M-P1"* — i.e. upstream is mid-refactor to push breakpoint logic into adapters. **This stub is our primary integration touchpoint.**
+- `src/providers/{anthropic-messages,openai-chat}.ts` — the two shipped adapters. CORRECTION 2026-07-16: the earlier claim was inverted — the **OpenAI** adapter's `applyCacheHints` is fully implemented (deep-sorts tools, injects `prompt_cache_key`); it is the **Anthropic** adapter's that is the stub (breakpoints stay in the orchestrator pipeline).
 - `src/orchestrator/{index,breakpoint-placer,request-mutator}.ts` — **Anthropic-coupled**: operate on `AnthropicMessagesRequest`, inject `cache_control`. Needs to become provider-aware (delegate to `adapter.applyCacheHints`; no-op for implicit-cache providers).
 - `src/pruner/` — K-pruning + stubs + materialization. Provider-agnostic in spirit.
 - `src/proxy/server.ts` — routing + upstream forwarding; Bedrock/SigV4 already wired. Upstream host/port come from config.
@@ -86,7 +90,7 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 
 ## 6. Infra facts discovered (2026-06-29)
 
-- **litellm** runs as podman container `litellm-external` on `0.0.0.0:4100`, config `/etc/litellm/config.yaml` (HA on epyc1+epyc2; source repo `petabit-litellm/config/models.catalog.yaml`). `:4000` is a separate listener (redis-sentinel tier).
+- **litellm** runs as podman container `litellm-external` on `0.0.0.0:4100`, config `/etc/litellm/config.yaml` (HA on epyc1+epyc2; source repo `petabit-litellm/config/models.catalog.yaml`). `:4000` is a separate listener (redis-sentinel tier). CORRECTION 2026-07-16: **Pi's actual LiteLLM target is `192.168.109.71:4000` (no-auth)** — `:4100` is 401-gated. CacheLane's upstream is therefore `:4000`, per `docs/runbook-litellm.md`.
 - Exposes **both** `/v1/messages` (Anthropic, 405 on GET = route exists) and `/v1/chat/completions` (OpenAI). `/health` needs auth (401). Master key readable via passwordless `sudo -n`.
 - Models include self-hosted `qwen36-27b` (vLLM `192.168.109.73:8200/8201`, **free**), `qwen36-27b-skynet1` (`192.168.104.213:8200`), and paid `gpt-4o` / `gpt-5.5` (real OpenAI). Use `qwen36-27b` for free smoke tests.
 - **Dispatch path is MCP-based, not HTTP**: Pi → `skynet` MCP server (`skynet-mcp.py` → `skynet_chat`) → litellm model_name alias. CacheLane (an HTTP proxy) therefore does not intercept the existing path by default — see Phase 1b.

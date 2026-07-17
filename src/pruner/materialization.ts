@@ -2,6 +2,7 @@ import type {
   MaterializableRequest,
   MaterializePrunedBlocksParams,
   PromptBlockPlacement,
+  PruneDecision,
 } from "./types.js";
 import { formatStubText } from "./stubs.js";
 
@@ -80,6 +81,79 @@ export function materializePrunedBlocks<
         text: formatStubText(decision),
       };
     }
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------- OpenAI chat
+
+/**
+ * OpenAI chat-completions shape: a pruned tool output is a whole
+ * `role:"tool"` message whose `content` (string or content-part array) IS the
+ * result payload. The message itself must survive — the OpenAI API requires a
+ * tool message for every `tool_calls` id in the preceding assistant message
+ * (pairing invariant) — so only `content` is replaced with the stub text.
+ * `content_index` in the placement is always 0 for this shape.
+ */
+export interface OpenAIChatMessageLike {
+  role: string;
+  content: unknown;
+  tool_call_id?: string;
+  [key: string]: unknown;
+}
+
+export interface OpenAIMaterializableRequest {
+  messages: OpenAIChatMessageLike[];
+  [key: string]: unknown;
+}
+
+export function materializePrunedBlocksOpenAI<
+  TRequest extends OpenAIMaterializableRequest,
+>(params: {
+  request: TRequest;
+  decisions: PruneDecision[];
+  block_placements: PromptBlockPlacement[];
+}): TRequest {
+  const out = {
+    ...params.request,
+    messages: params.request.messages.map((message) => ({ ...message })),
+  } as TRequest;
+
+  const placementsByBlockId = new Map<string, PromptBlockPlacement>();
+  for (const placement of params.block_placements) {
+    if (placementsByBlockId.has(placement.block_id)) {
+      throw new Error(`Duplicate placement for block: ${placement.block_id}`);
+    }
+    placementsByBlockId.set(placement.block_id, placement);
+  }
+
+  for (const decision of params.decisions) {
+    const placement = placementsByBlockId.get(decision.block_id);
+    if (!placement) {
+      throw new Error(
+        `Pruned block has no placement metadata: ${decision.block_id}`,
+      );
+    }
+
+    const message = out.messages[placement.message_index];
+    if (!message) {
+      throw new Error(
+        `Invalid message_index for block ${decision.block_id}: ${placement.message_index}`,
+      );
+    }
+    if (message.role !== "tool" || message.tool_call_id !== decision.block_id) {
+      // Placement drift (conversation edited/reordered between turns) — fail
+      // loud so handlePreRequest-style callers fall back to the unmutated
+      // request rather than stubbing the wrong message.
+      throw new Error(
+        `Placement mismatch for block ${decision.block_id}: ` +
+          `message ${placement.message_index} is role=${message.role} ` +
+          `tool_call_id=${String(message.tool_call_id)}`,
+      );
+    }
+
+    message.content = formatStubText(decision);
   }
 
   return out;

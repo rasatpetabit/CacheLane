@@ -153,6 +153,7 @@ function recordExplanation(
         kind: decision.kind,
         stub_summary: decision.stub_summary,
         has_refetch_handle: decision.refetch_handle.length > 0,
+        tokens_reclaimed: Math.max(decision.original_tokens - decision.stub_tokens, 0),
       })),
       block_metadata: explainBlockMetadata(input.block_placements),
       region_metadata: explainRegionMetadata(

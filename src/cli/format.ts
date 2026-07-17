@@ -18,6 +18,7 @@ export function formatStats(stats: CachelaneStats): string {
     `Baseline cost units: ${stats.baseline_cost_units.toFixed(2)}`,
     `Savings ratio: ${percent(stats.savings_ratio)}`,
     `Pruned blocks: ${stats.pruner_counts.pruned_blocks}`,
+    `Tokens reclaimed by pruning: ${stats.pruner_counts.tokens_reclaimed}`,
     `Keepalive pings: ${stats.keepalive_counts.pings}`,
     `Estimated compression tokens saved: ${stats.compression_counts.tokens_saved}`,
   ].join("\n");

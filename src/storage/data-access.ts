@@ -748,6 +748,35 @@ export function openDatabase(dbPath: string): CachelaneDb {
       pruner_counts: {
         pruned_blocks: row.pruned_blocks,
         turns_with_pruning: row.turns_with_pruning,
+        // Decision-time capture: markStubs overwrites blocks.token_count with
+        // the stub's count, so the original size only survives inside each
+        // explanation's prune_decisions_json. Sum it here.
+        tokens_reclaimed: (() => {
+          try {
+            const rows = rawDb.prepare(`
+              SELECT prune_decisions_json FROM turn_explanations
+              ${where.sql}${where.sql ? " AND" : " WHERE"} pruned_blocks_count > 0
+            `).all(where.bindings) as { prune_decisions_json: string }[];
+            let total = 0;
+            for (const r of rows) {
+              try {
+                const decisions = JSON.parse(r.prune_decisions_json) as Array<{
+                  tokens_reclaimed?: number;
+                }>;
+                for (const d of decisions) {
+                  if (typeof d.tokens_reclaimed === "number" && d.tokens_reclaimed > 0) {
+                    total += d.tokens_reclaimed;
+                  }
+                }
+              } catch {
+                /* pre-field or malformed record — contributes 0 */
+              }
+            }
+            return total;
+          } catch {
+            return 0;
+          }
+        })(),
       },
       keepalive_counts: {
         pings: row.keepalive_pings,
