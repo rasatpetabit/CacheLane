@@ -160,12 +160,17 @@ fail=0
 probe_tcp() { timeout 2 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
 probe_litellm() { curl -sf -m 3 -H 'Authorization: Bearer noauth' http://127.0.0.1:7332/v1/models >/dev/null; }
 probe_claude() {
+  # Must NOT POST /v1/messages: that route is claimed by the Anthropic adapter,
+  # so every probe was recorded as a turn_explanation at request time and then
+  # orphaned (the invalid key means no usage ever comes back, so no turns row).
+  # That produced ~1.1k orphan rows/day. A GET is claimed by no adapter and
+  # short-circuits to forwardUpstream with zero recording. Liveness semantics
+  # are unchanged: this still only asserts that some HTTP status came back.
   local code
   code=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' \
-    -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+    -H 'anthropic-version: 2023-06-01' \
     -H 'x-api-key: invalid-probe-key' \
-    -d '{"model":"probe","max_tokens":1,"messages":[{"role":"user","content":"x"}]}' \
-    http://127.0.0.1:7333/v1/messages || true)
+    http://127.0.0.1:7333/v1/models || true)
   [[ -n "$code" && "$code" != "000" ]]
 }
 check_one() {

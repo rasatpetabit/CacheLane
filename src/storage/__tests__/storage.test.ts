@@ -271,6 +271,43 @@ describe("openDatabase", () => {
     expect(db.allocateTurnNumber({ workspace_id: "ws-1", session_id: "sess-1" })).toBe(5);
   });
 
+  // Regression: `turns` uses INSERT OR IGNORE (first writer wins) while the
+  // explanation upsert reassigned turn_id (last writer wins). On a tuple
+  // collision the two disagreed, orphaning the explanation with no error.
+  it("keeps the first writer's turn_id when two writes collide on the same tuple", () => {
+    db = openDatabase(path.join(tmpDir, "test.db"));
+    const now = Date.now();
+    const explanation = (turnId: string) => ({
+      turn_id: turnId,
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      turn_number: 7,
+      model: "claude-opus-4-7",
+      prefix_breakpoint_hash: null,
+      middle_breakpoint_hash: null,
+      mutated: true,
+      pruned_blocks_count: 0,
+      prune_decisions: [],
+      block_metadata: [],
+      region_metadata: { message_count: 1, stable_count: 0, semi_count: 0, volatile_count: 1 },
+      signals: ["prefix_cached"],
+      created_at: now,
+      updated_at: now,
+    });
+
+    db.insertTurnExplanation(explanation("turn-first"));
+    db.insertTurnExplanation(explanation("turn-second"));
+
+    const stored = db.getTurnExplanation({
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      turn_number: 7,
+    });
+    // `turns` would have kept "turn-first" via INSERT OR IGNORE, so the
+    // explanation must not drift to "turn-second" or it is orphaned.
+    expect(stored?.turn_id).toBe("turn-first");
+  });
+
   it("insertTurnExplanation round-trips metadata without content fields", () => {
     db = openDatabase(path.join(tmpDir, "test.db"));
     const now = Date.now();

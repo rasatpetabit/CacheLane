@@ -472,7 +472,10 @@ export function openDatabase(dbPath: string): CachelaneDb {
        @usage_cache_read_tokens, @usage_effective_cost_units,
        @created_at, @updated_at)
     ON CONFLICT(workspace_id, session_id, turn_number) DO UPDATE SET
-      turn_id = excluded.turn_id,
+      -- turn_id is deliberately NOT reassigned. The turns table uses
+      -- INSERT OR IGNORE (first writer wins), so adopting excluded.turn_id
+      -- here would point the explanation at an id turns never stored,
+      -- creating a silent orphan.
       model = excluded.model,
       prefix_breakpoint_hash = excluded.prefix_breakpoint_hash,
       middle_breakpoint_hash = excluded.middle_breakpoint_hash,
