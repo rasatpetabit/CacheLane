@@ -61,6 +61,11 @@ export const shellCompressor: ToolOutputCompressor = {
     if (result === null) {
       return { content: input.content, content_type: "passthrough", compressor_id: "passthrough", lossiness: "passthrough" };
     }
+    // Shell profiles summarise rather than re-encode, so they can never be
+    // reconstructed. In lossless mode pass the output through untouched.
+    if (input.mode === "lossless") {
+      return { content: input.content, content_type: "shell", compressor_id: "shell", lossiness: "lossless" };
+    }
     return result.output;
   },
 };

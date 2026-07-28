@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { platform } from "node:process";
+import { spawn } from "node:child_process";
+import { env, platform } from "node:process";
 import type { CachelaneDb } from "../storage/index.js";
 import { buildReportData } from "./query.js";
 import { renderReportHtml } from "./render-html.js";
@@ -45,13 +45,28 @@ export function generateReport(
   };
 }
 
-export function openInBrowser(filePath: string): void {
+/**
+ * True when there is no desktop session to open a browser into. On a headless
+ * Linux host `xdg-open` blocks indefinitely instead of failing, so detect the
+ * case up front rather than spawning something that never returns.
+ */
+export function isHeadless(): boolean {
+  if (platform === "darwin" || platform === "win32") return false;
+  return !env.DISPLAY && !env.WAYLAND_DISPLAY;
+}
+
+export function openInBrowser(filePath: string): boolean {
+  if (isHeadless()) return false;
   const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
   const args = platform === "win32" ? ["", filePath] : [filePath];
   try {
-    const child = execFile(cmd, args, () => { /* best-effort; ignore errors */ });
-    child.unref?.();
+    // detached + ignored stdio so the CLI can exit without waiting on the child.
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    child.on("error", () => { /* best-effort; ignore errors */ });
+    child.unref();
+    return true;
   } catch {
     /* fail-open: never throw from opening a browser */
+    return false;
   }
 }

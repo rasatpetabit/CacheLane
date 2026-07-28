@@ -484,8 +484,11 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
         const result = generateReport(context.db, opts, outPath, benchmark);
         io.stdout(`${formatReportCompletion(result)}\n`);
         if (cmd.open !== false) {
-          openInBrowser(result.out_path);
-          io.stdout("opening in browser...\n");
+          io.stdout(
+            openInBrowser(result.out_path)
+              ? "opening in browser...\n"
+              : "no desktop session detected; skipped opening a browser\n",
+          );
         }
       } finally {
         close();

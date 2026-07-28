@@ -13,6 +13,25 @@ describe("compression registry", () => {
     ]);
   });
 
+  it("shell compressor preserves content byte-for-byte in lossless mode", () => {
+    const content = [
+      "76122d5 2026-07-17 ops(runtime): raise floor to Node 22",
+      "8c8c629 2026-07-17 fix(install): hermetic dual-home MCP detection",
+      "5c4fa0d 2026-07-16 fix(cli): clarify cumulative prune metrics",
+    ].join("\n");
+
+    const result = routeCompression({
+      tool_use_id: "tool-lossless-shell",
+      content,
+      command: "git log -12 --pretty=format:'%h %cd %s'",
+      mode: "lossless",
+      json_max_array_items: 20,
+    });
+
+    expect(result.content).toBe(content);
+    expect(result.lossiness).not.toBe("lossy");
+  });
+
   it("dispatches to the first matching compressor", () => {
     const custom: ToolOutputCompressor = {
       id: "custom-json",
