@@ -72,3 +72,42 @@ left alone. Post-prune `stats` and `report` both verified working (902 KB,
   no deterministic control that would have prevented the stray worktree.
   Explicitly deferred this pass.
 - Growth of `turn_explanations` is unbounded; no retention policy on it yet.
+
+## 2026-07-28 (cont.) — stub refetch handles were never expandable
+
+Found only on a second pass, after being asked whether the earlier work was
+actually complete. It had been visible in every tool result all session and was
+walked past. Commit `fb29ca5`.
+
+**The bug.** `formatStubText` emitted `block_id.slice(0, 8)`. Real block ids are
+Anthropic tool_use_ids (`toolu_` + suffix), so that slice is always `"toolu_01"`
+— which `expandStub`'s `/^[A-Za-z0-9]{8}$/` rejects for the underscore, and
+which is non-discriminating regardless since every id shares it. **0 of 1,624
+stubs** could ever be rehydrated through the handle they advertised. The
+"refetchable stubs (non-lossy)" invariant in CLAUDE.md was broken for every stub
+CacheLane has ever emitted.
+
+**Why nothing caught it.** `cachelane verify` has a rehydrate gate that does
+exactly this round-trip — but it used `blockId = "verifyaa"`, a bare
+alphanumeric fixture chosen to satisfy the validator. Every unit test used the
+same synthetic id space (`01KPRUNE…`). The gate passed by construction while
+100% of production stubs failed. A verification whose fixture is shaped to fit
+the validator instead of reality is worth less than no verification, because it
+actively signals safety.
+
+*Fix:* stub advertises the full block id (display tag stays truncated);
+`expandStub` accepts >=8 chars over the real id charset, honoring the spec's
+"8-char prefix **accepted**" as shorthand rather than a hard requirement;
+`verify.ts` uses a `toolu_`-shaped fixture. Added a round-trip regression test
+binding `formatStubText`'s advertised handle to `expandStub`'s acceptance.
+
+*Verified:* 610 tests pass, tsc/lint clean, `cachelane verify` green, and 5/5
+real stubs from the live DB expand successfully via the deployed build.
+
+**Still open — the MCP servers are stale.** The four
+`/srv/cachelane/dist/cli/index.cjs mcp` processes predate the deploy and still
+answer with the old `invalid_block_id` message. They are Claude Code child
+processes, so they need an MCP reconnect (`/mcp`) or a Claude Code restart to
+pick up `fb29ca5`. Until then the tool surface still rejects valid handles.
+Stubs already sitting in a live context also retain their old, unusable handles;
+only newly-emitted stubs get the corrected format.
