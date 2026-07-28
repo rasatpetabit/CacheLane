@@ -152,7 +152,7 @@ describe("pruneExpiredBlocks", () => {
     };
 
     expect(formatStubText(decision)).toBe(
-      "[stub:01KPRUNE] tool_output tool:read:src/auth.ts (250 tokens elided) | refetch via cachelane_expand(block_id=01KPRUNE)",
+      "[stub:01KPRUNE] tool_output tool:read:src/auth.ts (250 tokens elided) | refetch via cachelane_expand(block_id=01KPRUNE0000000000000007)",
     );
   });
 });
@@ -212,7 +212,7 @@ describe("materializePrunedBlocks", () => {
     expect(out.messages[0]?.content[0]).toEqual({ type: "text", text: "keep-0" });
     expect(out.messages[0]?.content[1]).toEqual({
       type: "text",
-      text: "[stub:01KMATRL] tool_output tool:read:src/auth.ts (250 tokens elided) | refetch via cachelane_expand(block_id=01KMATRL)",
+      text: "[stub:01KMATRL] tool_output tool:read:src/auth.ts (250 tokens elided) | refetch via cachelane_expand(block_id=01KMATRL000000000000001)",
     });
     expect(out.messages[1]?.content[0]).toEqual({ type: "text", text: "keep-1" });
     expect(request.messages[0]?.content[1]).toEqual({
@@ -312,6 +312,38 @@ describe("materializePrunedBlocks", () => {
 });
 
 describe("expandStub", () => {
+  // Regression: real block ids are Anthropic tool_use_ids ("toolu_" + suffix),
+  // not bare alphanumerics. The stub must advertise a handle that expandStub
+  // actually accepts and that resolves to exactly one block.
+  it("expands the block_id the stub advertises, for a real tool_use_id", () => {
+    const realId = "toolu_01Y5UyHLbu57widWxwSkbv5g";
+    insertBlock(realId, {
+      is_stub: true,
+      unused_turns: 3,
+      stub_summary: "tool_output (1074 tokens elided)",
+      refetch_handle: "tool:bash:git-status",
+    });
+
+    const stubText = formatStubText({
+      block_id: realId,
+      stub_summary: "tool_output (1074 tokens elided)",
+      stub_tokens: 20,
+    } as PruneDecision);
+
+    const advertised = /block_id=([^)]+)\)/.exec(stubText)?.[1];
+    expect(advertised).toBeDefined();
+
+    const result = expandStub(db, {
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      block_id: advertised as string,
+      turn_number: 6,
+      updated_at: 1_715_000_006_000,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts an 8-character block prefix and returns the trusted refetch request", () => {
     insertBlock("01KEXPAND000000000000001", {
       is_stub: true,

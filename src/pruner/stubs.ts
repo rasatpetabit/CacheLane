@@ -7,6 +7,8 @@ export function makeStubSummary(row: BlockRow): string {
 }
 
 export function formatStubText(decision: PruneDecision): string {
+  // Advertise the full block id: real ids share a common "toolu_01" prefix, so
+  // a truncated one is both rejected by expandStub and non-discriminating.
   const shortId = decision.block_id.slice(0, 8);
-  return `[stub:${shortId}] ${decision.stub_summary} | refetch via cachelane_expand(block_id=${shortId})`;
+  return `[stub:${shortId}] ${decision.stub_summary} | refetch via cachelane_expand(block_id=${decision.block_id})`;
 }

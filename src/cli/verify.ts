@@ -42,7 +42,9 @@ export function runVerify(): VerifyReport {
     checks.push({ name: "mutates", ok: result.mutated, detail: result.mutated ? "breakpoints placed" : "no mutation" });
 
     // 2) stub: insert a tool_output block at turn 1, prune at turn 5 (age >= K=3).
-    const blockId = "verifyaa";
+    // Must mirror a real Anthropic tool_use_id. A bare alphanumeric fixture
+    // made this gate pass while every real-world stub failed to expand.
+    const blockId = "toolu_01Verify5tubExpand9aaaa";
     db.insertBlock({
       id: blockId, workspace_id: WS, session_id: SESSION, content_hash: createHash("sha256").update("data").digest("hex"),
       kind: "tool_output", volatility: "VOLATILE", is_pinned: false, token_count: 10,

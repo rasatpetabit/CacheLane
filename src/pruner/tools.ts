@@ -13,7 +13,10 @@ function expandFailure(
   return { ok: false, error: { code, message } };
 }
 
-const EXPAND_BLOCK_ID_PREFIX_RE = /^[A-Za-z0-9]{8}$/;
+// Block ids are Anthropic tool_use_ids ("toolu_" + suffix), so the accepted
+// charset must include the separators those ids use. Per the spec an 8-char
+// prefix is *accepted* as shorthand, not required — a full id is also valid.
+const EXPAND_BLOCK_ID_PREFIX_RE = /^[A-Za-z0-9_-]{8,}$/;
 
 export function expandStub(
   db: CachelaneDb,
@@ -22,7 +25,7 @@ export function expandStub(
   if (!EXPAND_BLOCK_ID_PREFIX_RE.test(params.block_id)) {
     return expandFailure(
       "invalid_block_id",
-      "Block id must be an 8-character alphanumeric prefix",
+      "Block id must be at least 8 characters (letters, digits, '_' or '-')",
     );
   }
 
