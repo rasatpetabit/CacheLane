@@ -26,6 +26,11 @@ function pct(v: number): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
+/** Thousands-separated integer — raw counts like 259297408 are unreadable. */
+function num(v: number): string {
+  return Math.round(v).toLocaleString("en-US");
+}
+
 function cumulative(values: number[]): number[] {
   let acc = 0;
   return values.map((value) => (acc += value));
@@ -226,16 +231,16 @@ export function renderReportHtml(
   <div class="cards">
   ${card("Savings", pct(data.stats.savings_ratio))}
   ${card("Cache hit ratio", pct(data.stats.cache_hit_ratio))}
-  ${card("Turns", String(data.stats.turns))}
-  ${card("Effective units", data.stats.effective_cost_units.toFixed(0))}
-  ${card("Baseline units", data.stats.baseline_cost_units.toFixed(0))}
-  ${card("Mutated turns", String(outcomes.mutated))}
-  ${card("Baseline turns", String(outcomes.baseline))}
-  ${card("No-op turns", String(outcomes.no_op))}
-  ${card("Fail-open turns", String(outcomes.fail_open), outcomes.fail_open > 0)}
-  ${card("Prune actions", String(data.stats.pruner_counts.pruned_blocks))}
-  ${card("Tokens reclaimed", String(data.stats.pruner_counts.tokens_reclaimed))}
-  ${card("Compression tokens saved", String(data.stats.compression_counts.tokens_saved))}
+  ${card("Turns", num(data.stats.turns))}
+  ${card("Effective units", num(data.stats.effective_cost_units))}
+  ${card("Baseline units", num(data.stats.baseline_cost_units))}
+  ${card("Mutated turns", num(outcomes.mutated))}
+  ${card("Baseline turns", num(outcomes.baseline))}
+  ${card("No-op turns", num(outcomes.no_op))}
+  ${card("Fail-open turns", num(outcomes.fail_open), outcomes.fail_open > 0)}
+  ${card("Prune actions", num(data.stats.pruner_counts.pruned_blocks))}
+  ${card("Tokens reclaimed", num(data.stats.pruner_counts.tokens_reclaimed))}
+  ${card("Compression tokens saved", num(data.stats.compression_counts.tokens_saved))}
 </div>
 <p class="note">Prune actions are cumulative decision events; the same logical block can be pruned again on a later turn.</p>
 <table><thead><tr><th>Workspace</th><th>Session</th><th>Turns</th><th>Hit</th><th>Savings</th><th>Last active</th></tr></thead><tbody>${sessionRows}</tbody></table>
