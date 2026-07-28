@@ -111,3 +111,35 @@ processes, so they need an MCP reconnect (`/mcp`) or a Claude Code restart to
 pick up `fb29ca5`. Until then the tool surface still rejects valid handles.
 Stubs already sitting in a live context also retain their old, unusable handles;
 only newly-emitted stubs get the corrected format.
+
+## 2026-07-28 (cont.) — Decisions tab is substantively empty: orphaned explanations
+
+Found only by actually rendering the report and looking at it (headless Chrome
+screenshot), after an earlier claim that structural checks — well-formed HTML,
+SVG count, zero external refs — were sufficient. They were not: the page renders
+cleanly while two of its three tabs carry no usable content.
+
+- **Usage tab:** genuinely good. Metrics internally consistent (the per-profile
+  table sums to exactly the 144,727 compression total; 235 git-log + 291
+  git-status + 88 git-diff = the 614 lossy events found earlier).
+- **Curve tab:** empty under the default `workspace` scope — by design, it
+  declines to concatenate unrelated session timelines into a synthetic series.
+  Defensible, but the default `cachelane report` ships a dead tab.
+- **Decisions tab:** renders, but every row reads `details missing`, the
+  Region (S/M/V) column is blank, and Prune decisions are all `—`.
+
+**Root cause (measured, not inferred):** `13,217 of 14,803` (89.3%)
+`turn_explanations` rows are orphaned — their `turn_id` matches no row in
+`turns`. Only 1,586 join. The report is correct to ignore them; the write path
+is producing explanation records whose turn ids never resolve.
+
+This also corrects an earlier entry in this log: `turn_explanations` (~26 MB,
+the DB's bulk) was described as "live reporting data the report reads, so it was
+left alone." It is in fact ~89% orphaned rows the report discards. The DB bloat
+and the broken Decisions tab are the same defect.
+
+**Not fixed — deliberately.** This is a data-model/write-path bug outside the
+scope that was being worked, and diagnosing where turn ids diverge (hook vs
+proxy turn recording, session/workspace keying, or ordering between the turns
+and turn_explanations writes) warrants its own investigation rather than a
+guessed patch.
