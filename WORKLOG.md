@@ -45,14 +45,30 @@ generation went from >120 s (hang) to ~0.9 s.
 **Verified:** 609 tests passed / 2 skipped, `tsc --noEmit` clean, lint clean,
 build clean, and `report` exercised end-to-end without `--no-open`.
 
+**Deployed.** `scripts/install-runtime.sh` (dry run first, then real) installed
+`47ed5a9` to `/srv/cachelane`; both units restarted and active. Prior slot kept
+at `/srv/cachelane.backup-20260728T200303Z`. Live round-trip confirms the fix at
+the surface where it is consumed: the same `git log -12 --pretty=format:...` that
+previously came back as `76122d5 8c8c629 … (?)` now returns all 12 commits
+byte-intact.
+
+**DB prune.** Deleted 57,611 `passthrough` rows with `tokens_saved <= 0` from
+`compression_events`, keeping all 861 real events (247 lossless + 614 lossy) as
+an audit trail. `VACUUM` + `integrity_check` clean. Note the file barely shrank:
+`compression_events` was never the space driver — `turn_explanations` (~26 MB
+logical) dominates, and that is live reporting data the report reads, so it was
+left alone. Post-prune `stats` and `report` both verified working (902 KB,
+2052 turns, 19 sessions, self-contained HTML with no external refs).
+
 **Not done / open:**
-- **Fix is committed but NOT deployed.** `/srv/cachelane` (both
-  `cachelane-claude.service` :7333 and `cachelane-litellm.service` :7332, plus
-  the `dist/cli/index.cjs` hooks) still runs the pre-fix build, so live sessions
-  are still subject to the lossy shell path. Deploy via
-  `scripts/install-runtime.sh` + restart both units.
-- The 406 already-corrupted events are unrecoverable (no retained originals).
-- ~99% of `compression_events` are `passthrough` saving 0 tokens, and the DB is
-  ~47 MB. Worth deciding whether to stop recording no-op events and/or prune.
+- The 614 already-corrupted lossy events are unrecoverable (no retained
+  originals). They are kept deliberately as a record of what was affected.
+- `retention.enabled` is still `false`. Nothing currently backs the
+  "refetch via `cachelane_expand`" promise for lossy events. In lossless mode
+  nothing new becomes lossy, so this is latent — but flipping the mode to
+  `balanced`/`aggressive` without enabling retention would reintroduce
+  unrecoverable loss.
 - Worktree placement is governed only by prose in `/srv/dev/AGENTS.md`; there is
   no deterministic control that would have prevented the stray worktree.
+  Explicitly deferred this pass.
+- Growth of `turn_explanations` is unbounded; no retention policy on it yet.
