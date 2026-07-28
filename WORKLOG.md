@@ -143,3 +143,59 @@ scope that was being worked, and diagnosing where turn ids diverge (hook vs
 proxy turn recording, session/workspace keying, or ordering between the turns
 and turn_explanations writes) warrants its own investigation rather than a
 guessed patch.
+
+## 2026-07-28 (cont.) — investigation outcome: two disjoint defects, C2 blocked
+
+Four independent lenses (2x Explore, 2x Plan) plus a cross-vendor adversarial
+pass. Spec: `docs/specs/2026-07-28-decisions-tab-and-probe-exhaust-v1.md` (v2).
+Every load-bearing agent claim was re-verified directly against the DB before
+being acted on. Commits `f06d373` (C1+C3), `18737af` (number formatting).
+
+**The framing in the entry above was wrong.** "89% orphaned" welded together two
+disjoint populations:
+- **D1** — the Decisions tab "details missing" is 778 turns, **100% `mode:hook`**.
+- **D2** — the orphan pile is **99.5% `model='probe'`**, from the systemd
+  healthcheck POSTing a fake inference request through the recording path.
+
+Orphans are not in the report's driving set at all (`readCompletedTurns` is
+`FROM turns LEFT JOIN turn_explanations`), so deleting every orphan would not
+have changed one pixel of the Decisions tab. The two were never causally linked.
+
+**Landed.** C1: `probe_claude` now GETs `/v1/models` — no adapter claims a GET, so
+it short-circuits to `forwardUpstream` with zero recording. Verified live: 3
+new-style probes wrote 0 rows; the old probe wrote 1 each. C3: the explanation
+upsert no longer reassigns `turn_id`, matching `turns`' INSERT OR IGNORE
+first-wins semantics; regression test added. C4: deleted 13,256 probe-orphans by
+the conjunction `model='probe' AND NOT EXISTS(...)`, **preserving all 74
+non-probe orphans** as diagnostic evidence.
+
+**Rejected on measured evidence (do not revisit without new data):**
+- *Adding `REFERENCES turns(id)`.* The most dangerous obvious fix. Explanations
+  are written on the request leg, turns on the response leg, so the FK would
+  reject every explanation insert on the happy path — inside a catch that only
+  `console.error`s, blanking the Decisions tab entirely. The asymmetry with
+  `block_references` is explained by write order, not oversight.
+- *Relaxing the report join to the tuple.* Counterfactual measured: rescues
+  **exactly 0 rows** (`tuple match BUT id mismatch = 0`).
+- *"Prune orphans to reclaim 26 MB."* Probe rows were **1.14 MB of 27.85 MB
+  (4.1%)**. The bulk is legitimate `block_metadata_json` on real rows
+  (`claude-opus-4-8`: 11.63 MB / 514 rows). Size and orphanhood are unrelated.
+
+**C2 (write explanations on the hook path) — BLOCKED, not implemented.**
+`handleHookEvent` (`src/cli/index.ts:218`) reconstructs turns post-hoc from the
+Claude Code transcript. It hardcodes `prefix_breakpoint_hash: null`,
+`middle_breakpoint_hash: null`, `pruned_blocks_count: 0` because in hook mode the
+proxy is bypassed and **the CacheLane pipeline never ran**. There are no prune
+decisions or region classifications to record. Implementing C2 would fabricate
+empty rows. "details missing" on hook turns is therefore *accurate reporting*.
+
+**Larger issue surfaced, NOT yet addressed.** Hook and proxy turns coexist in the
+same sessions (this session: 164 hook + 267 proxy). Claude Code routes through the
+proxy, which records the turn; then the `hook stop` handler re-reads the transcript
+and records the same logical turns **again** under different ids
+(`call.id` vs `randomUUID()`) and different turn numbers. All 778 hook turns carry
+`request_mutated: 1` (`cli/index.ts:275`) with `pruned_blocks_count: 0` and a null
+breakpoint hash — so they inflate the report's "Mutated turns" and turn counts
+without CacheLane having mutated anything. **Headline metrics are inflated by
+double-counting.** This needs its own investigation and a decision on whether hook
+recording should be suppressed when the proxy is in path.
