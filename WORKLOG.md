@@ -189,13 +189,38 @@ proxy is bypassed and **the CacheLane pipeline never ran**. There are no prune
 decisions or region classifications to record. Implementing C2 would fabricate
 empty rows. "details missing" on hook turns is therefore *accurate reporting*.
 
-**Larger issue surfaced, NOT yet addressed.** Hook and proxy turns coexist in the
-same sessions (this session: 164 hook + 267 proxy). Claude Code routes through the
-proxy, which records the turn; then the `hook stop` handler re-reads the transcript
-and records the same logical turns **again** under different ids
-(`call.id` vs `randomUUID()`) and different turn numbers. All 778 hook turns carry
-`request_mutated: 1` (`cli/index.ts:275`) with `pruned_blocks_count: 0` and a null
-breakpoint hash — so they inflate the report's "Mutated turns" and turn counts
-without CacheLane having mutated anything. **Headline metrics are inflated by
-double-counting.** This needs its own investigation and a decision on whether hook
-recording should be suppressed when the proxy is in path.
+**Hook/proxy coexistence — investigated; the initial "double-counting" read was
+OVERSTATED and is retracted.** Hook and proxy turns do coexist in the same
+sessions (this session: 221 hook + 308 proxy), recorded under different ids
+(`call.id` vs `randomUUID()`). The first reading was that the `hook stop` handler
+re-records the same logical turns, inflating headline metrics. **Measurement does
+not support that.**
+
+Pairing hook turns to proxy turns on identical `(input_tokens, output_tokens)`
+within the same session:
+
+| window | pairs |
+|---|---|
+| < 1s | 32 |
+| 1–10s | 34 |
+| 10–60s | 83 |
+| > 60s | 289 |
+
+Only the tight buckets are credible evidence of the same call recorded twice —
+**~66 of 906 hook turns (~7%)**. The 289 pairs more than a minute apart are almost
+certainly coincidental token-count collisions, and 468 hook turns have no twin at
+all. So hook recording is **largely complementary, not duplicative** — plausibly
+covering turns the proxy dropped at the `if (!usage) return;` gate
+(`proxy/server.ts:972`), which is exactly the population that produces orphans.
+
+What *is* still substantiated: all hook turns carry `request_mutated: 1`
+(`cli/index.ts:275`) while having `pruned_blocks_count: 0` and a null breakpoint
+hash. CacheLane did not mutate those requests, so counting them in the report's
+"Mutated turns" tile overstates what the orchestrator actually did. That is a
+narrow, well-evidenced defect and is the only part worth acting on without
+further investigation.
+
+**Lesson for the next reader:** the token-match heuristic is weak; do not treat a
+same-token pair as a duplicate without a tight time bound. Suppressing hook
+recording on the strength of the original reading would have deleted real
+coverage.
