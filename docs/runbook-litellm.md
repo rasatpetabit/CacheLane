@@ -221,6 +221,21 @@ Watch for: error rate, prune_fire_turns growth, baseline_turns (should stay ~0 o
 `blocks.id` collisions across sessions, agent completion failures on long tool-heavy chats.
 
 
+## Restart safety (2026-07-29)
+
+The dual-proxy health timer must not treat concurrent Pi sessions as a dead process.
+
+| Control | Behavior |
+|---|---|
+| Local liveness | `GET /healthz` on `:7332` and `:7333` is process-local only. It does **not** call LiteLLM, Anthropic, SQLite, or the pruning pipeline. |
+| Failure threshold | `cachelane-healthcheck` requires **3 consecutive local probe misses** before a lane is eligible to restart. One slow probe never restarts anything. |
+| Active-connection drain | Before restart, the checker counts established server-side sockets with `ss -Htn state established "( sport = :<port> )"`, waits one second, and checks again. Any active client blocks the restart and retains the failure count. |
+| State | Failure counters live under `/run/cachelane-healthcheck/` and survive timer runs via `RuntimeDirectoryPreserve=yes`. A successful local probe clears the counter. |
+| Installer restarts | `scripts/install-runtime.sh` waits for two consecutive idle samples per lane (`CACHELANE_DRAIN_TIMEOUT_SEC`, default 300s). Drain timeout aborts instead of forcing a restart. |
+| Operator override | If a truly wedged proxy still has clients, stop the timer, drain or kill clients, then restart the unit manually. The timer will not do that for you. |
+
+Canonical healthcheck source: `scripts/cachelane-healthcheck.sh` (installed to `/usr/local/sbin/cachelane-healthcheck`).
+
 ## Production install (2026-07-17)
 
 Runtime lives under **`/srv/cachelane`** (not `/srv/dev`). Units:

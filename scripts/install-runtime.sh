@@ -12,6 +12,7 @@ NODE_BIN=/usr/bin/node
 RUNTIME_NODE_DIR="$(dirname "$NODE_BIN")"
 STAGE=""
 BACKUP=""
+DRAIN_TIMEOUT_SEC="${CACHELANE_DRAIN_TIMEOUT_SEC:-300}"
 
 cleanup_stage() {
   if [[ -n "$STAGE" && -d "$STAGE" ]]; then
@@ -19,6 +20,30 @@ cleanup_stage() {
   fi
 }
 trap cleanup_stage EXIT
+
+has_active_connections() {
+  local port="$1" connections
+  connections="$(ss -Htn state established "( sport = :$port )" 2>/dev/null || true)"
+  [[ -n "$connections" ]]
+}
+
+wait_for_lane_drain() {
+  local port="$1" deadline idle_samples=0
+  deadline=$((SECONDS + DRAIN_TIMEOUT_SEC))
+  while (( SECONDS <= deadline )); do
+    if has_active_connections "$port"; then
+      idle_samples=0
+    else
+      idle_samples=$((idle_samples + 1))
+      if (( idle_samples >= 2 )); then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  echo "error: timed out waiting for active connections to drain on port $port; refusing restart" >&2
+  return 1
+}
 
 if [[ ! -x "$NODE_BIN" ]]; then
   echo "error: required runtime $NODE_BIN is missing" >&2
@@ -53,6 +78,12 @@ if [[ "${CACHELANE_DEPLOY_DRY_RUN:-0}" == "1" ]]; then
   echo "production was not changed"
   exit 0
 fi
+
+# The legacy timer can restart a busy lane after one slow upstream probe. Stop
+# it before mutating runtime files; successful deployment re-enables it after
+# both lanes load the local /healthz implementation. A failed deploy leaves it
+# stopped rather than reintroducing connection-killing false positives.
+sudo systemctl stop cachelane-healthcheck.timer 2>/dev/null || true
 
 BACKUP="${INSTALL}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
 if sudo test -d "$INSTALL"; then
@@ -151,44 +182,8 @@ TasksMax=256
 WantedBy=multi-user.target
 UNIT
 
-# Healthcheck (idempotent)
-sudo tee /usr/local/sbin/cachelane-healthcheck >/dev/null <<'HEALTH'
-#!/usr/bin/env bash
-set -euo pipefail
-LOG_TAG=cachelane-healthcheck
-fail=0
-probe_tcp() { timeout 2 bash -c "echo >/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
-probe_litellm() { curl -sf -m 3 -H 'Authorization: Bearer noauth' http://127.0.0.1:7332/v1/models >/dev/null; }
-probe_claude() {
-  # Must NOT POST /v1/messages: that route is claimed by the Anthropic adapter,
-  # so every probe was recorded as a turn_explanation at request time and then
-  # orphaned (the invalid key means no usage ever comes back, so no turns row).
-  # That produced ~1.1k orphan rows/day. A GET is claimed by no adapter and
-  # short-circuits to forwardUpstream with zero recording. Liveness semantics
-  # are unchanged: this still only asserts that some HTTP status came back.
-  local code
-  code=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' \
-    -H 'anthropic-version: 2023-06-01' \
-    -H 'x-api-key: invalid-probe-key' \
-    http://127.0.0.1:7333/v1/models || true)
-  [[ -n "$code" && "$code" != "000" ]]
-}
-check_one() {
-  local name="$1" port="$2" probe_fn="$3"
-  if ! systemctl is-active --quiet "$name"; then
-    logger -t "$LOG_TAG" "WARN $name inactive; starting"
-    systemctl start "$name" || true; fail=$((fail+1)); return
-  fi
-  if ! probe_tcp "$port" || ! "$probe_fn"; then
-    logger -t "$LOG_TAG" "WARN $name port/probe failed; restarting"
-    systemctl restart "$name" || true; fail=$((fail+1)); return
-  fi
-}
-check_one cachelane-litellm.service 7332 probe_litellm
-check_one cachelane-claude.service 7333 probe_claude
-[[ "$fail" -eq 0 ]]
-HEALTH
-sudo chmod 755 /usr/local/sbin/cachelane-healthcheck
+# Healthcheck (idempotent; canonical source is independently tested)
+sudo install -m 0755 "$REPO_ROOT/scripts/cachelane-healthcheck.sh" /usr/local/sbin/cachelane-healthcheck
 
 sudo tee "$UNIT_DIR/cachelane-healthcheck.service" >/dev/null <<'UNIT'
 [Unit]
@@ -196,6 +191,8 @@ Description=CacheLane dual-proxy healthcheck (restart on failure)
 After=cachelane-litellm.service cachelane-claude.service
 [Service]
 Type=oneshot
+RuntimeDirectory=cachelane-healthcheck
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/local/sbin/cachelane-healthcheck
 UNIT
 
@@ -219,11 +216,15 @@ sudo systemctl enable cachelane-litellm.service cachelane-claude.service cachela
 # No-op on upgrades; ensures both lanes exist before the dual health gate on a first install.
 sudo systemctl start cachelane-litellm.service cachelane-claude.service
 
+echo "Waiting for LiteLLM lane connections to drain"
+wait_for_lane_drain 7332 || exit 1
 echo "Restarting LiteLLM lane"
 sudo systemctl restart cachelane-litellm.service
 sleep 1
 "$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
 
+echo "Waiting for Claude lane connections to drain"
+wait_for_lane_drain 7333 || exit 1
 echo "Restarting Claude lane"
 sudo systemctl restart cachelane-claude.service
 sleep 1
