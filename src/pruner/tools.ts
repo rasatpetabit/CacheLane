@@ -13,45 +13,63 @@ function expandFailure(
   return { ok: false, error: { code, message } };
 }
 
-// Block ids are Anthropic tool_use_ids ("toolu_" + suffix), so the accepted
-// charset must include the separators those ids use. Per the spec an 8-char
-// prefix is *accepted* as shorthand, not required — a full id is also valid.
-const EXPAND_BLOCK_ID_PREFIX_RE = /^[A-Za-z0-9_-]{8,}$/;
+// Full Anthropic/OpenAI tool ids may be short (tests and some compatible
+// providers use ids such as "call_A"). Prefix shorthand remains deliberately
+// stricter: at least 8 characters, bounded to keep queries predictable.
+const EXPAND_BLOCK_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const EXPAND_BLOCK_ID_PREFIX_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+// True only if a block can round-trip through expandStub. The pruner calls this
+// with the full row id, so exact lookup proves both identity and session scope.
+export function isExpandableBlockId(
+  db: CachelaneDb,
+  workspace_id: string,
+  session_id: string,
+  block_id: string,
+): boolean {
+  if (!EXPAND_BLOCK_ID_RE.test(block_id)) return false;
+  const row = db.getBlock(block_id, session_id);
+  return (
+    row !== null &&
+    row.workspace_id === workspace_id &&
+    row.session_id === session_id
+  );
+}
 
 export function expandStub(
   db: CachelaneDb,
   params: ExpandStubParams,
 ): ExpandStubResult {
-  if (!EXPAND_BLOCK_ID_PREFIX_RE.test(params.block_id)) {
+  if (!EXPAND_BLOCK_ID_RE.test(params.block_id)) {
     return expandFailure(
       "invalid_block_id",
-      "Block id must be at least 8 characters (letters, digits, '_' or '-')",
+      "Block id must be 1-128 characters (letters, digits, '_' or '-')",
     );
   }
 
-  const rows = db.getBlocksByIdPrefix({
-    workspace_id: params.workspace_id,
-    session_id: params.session_id,
-    block_id_prefix: params.block_id,
-  });
+  // Prefer exact lookup so short but valid full ids round-trip. Only fall back
+  // to prefix lookup when the caller supplied at least 8 characters.
+  const exact = db.getBlock(params.block_id, params.session_id);
+  let row =
+    exact?.workspace_id === params.workspace_id ? exact : undefined;
 
-  if (rows.length === 0) {
-    return expandFailure(
-      "missing_block",
-      `No block found for id prefix: ${params.block_id}`,
-    );
+  if (!row && EXPAND_BLOCK_ID_PREFIX_RE.test(params.block_id)) {
+    const rows = db.getBlocksByIdPrefix({
+      workspace_id: params.workspace_id,
+      session_id: params.session_id,
+      block_id_prefix: params.block_id,
+    });
+    if (rows.length > 1) {
+      return expandFailure(
+        "ambiguous_prefix",
+        `Ambiguous block id prefix: ${params.block_id}`,
+      );
+    }
+    row = rows[0];
   }
 
-  if (rows.length > 1) {
-    return expandFailure(
-      "ambiguous_prefix",
-      `Ambiguous block id prefix: ${params.block_id}`,
-    );
-  }
-
-  const row = rows[0];
   if (!row) {
-    return expandFailure("missing_block", `No block found for id prefix: ${params.block_id}`);
+    return expandFailure("missing_block", `No block found for id: ${params.block_id}`);
   }
   if (row.is_stub !== 1) {
     return expandFailure("not_stub", `Block is not a stub: ${row.id}`);
