@@ -464,11 +464,20 @@ export function createProxyServer(
     const countsAsWork = !(req.method === "GET" && pathForInflight === "/healthz");
     if (countsAsWork) {
       inflight += 1;
-      // "close" fires on both clean finish and abort, and exactly once per
-      // response, so it is the only correct place to decrement.
-      res.on("close", () => {
+      // Decrement on whichever of "finish" (clean completion) or "close"
+      // (completion or premature teardown) arrives first, guarded so it happens
+      // exactly once. "close" alone is sufficient on current Node, but a count
+      // that can only ever drift upward is the one failure mode that would
+      // silently recreate the never-drains bug this counter exists to fix, so
+      // it is worth belt-and-braces.
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
         inflight -= 1;
-      });
+      };
+      res.on("finish", settle);
+      res.on("close", settle);
     }
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));

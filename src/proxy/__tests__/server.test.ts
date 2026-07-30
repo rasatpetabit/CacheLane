@@ -810,6 +810,39 @@ describe("proxy pipeline integration", () => {
       }
     });
 
+    it("returns inflight to zero after a completed request", async () => {
+      // The whole point of the counter is that it comes back down: a count that
+      // only drifts upward would make the installer's drain check unsatisfiable,
+      // recreating the never-drains bug one layer down. Exercised over a reused
+      // keep-alive socket, since that is what every real client holds.
+      // The keep-alive agent is load-bearing: with a fresh connection per
+      // request the response "close" event fires at teardown and the count
+      // happens to reach zero anyway, so this only reproduces when the socket
+      // is reused -- which is what every real client does.
+      const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+      const request = (reqPath: string, body?: string) =>
+        new Promise<string>((resolve, reject) => {
+          const req = http.request(
+            { host: "127.0.0.1", port: proxyPort, path: reqPath, method: body ? "POST" : "GET", agent },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (c: Buffer) => chunks.push(c));
+              res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+            },
+          );
+          req.on("error", reject);
+          req.end(body);
+        });
+
+      try {
+        await request("/v1/messages", JSON.stringify(buildMessagesRequest()));
+        const after = await request("/healthz");
+        expect(JSON.parse(after).inflight).toBe(0);
+      } finally {
+        agent.destroy();
+      }
+    });
+
     it("prepends an upstream path prefix while still intercepting bare /v1/messages locally", async () => {
       const prefixedProxy = startProxy({
         port: 0,
