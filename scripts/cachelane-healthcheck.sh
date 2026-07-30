@@ -51,6 +51,12 @@ probe_local() {
     "http://127.0.0.1:${port}/healthz" >/dev/null
 }
 
+# Deliberately socket-based, unlike the installer's drain check. This runs only
+# AFTER the local probe already failed, so the lane cannot be trusted to report
+# its own in-flight count -- and a lane that is merely slow would answer
+# "inflight: 0" and get severed, which is the false positive this guard exists
+# to prevent. Sockets are the conservative signal here: never restart a lane
+# that anything is still connected to.
 has_active_connections() {
   local port="$1" connections
   connections="$(ss -Htn state established "( sport = :$port )" 2>/dev/null || true)"
@@ -60,6 +66,14 @@ has_active_connections() {
 defer_for_active_connections() {
   local name="$1" port="$2" failures="$3"
   log_warn "$name local probe failed $failures consecutive times; restart deferred: active connections on port $port"
+  # Roll the counter back to one below the threshold. Without this the count
+  # accumulates for as long as clients stay connected, so the moment the last
+  # session disconnects a restart fires on hours-old evidence -- observed live
+  # at 23/3 on the litellm lane. Holding it at THRESHOLD-1 keeps the lane armed
+  # but forces one FRESH failing probe against an idle lane before severing it.
+  if (( failures >= FAILURE_THRESHOLD )); then
+    write_failure_count "$name" "$(( FAILURE_THRESHOLD - 1 ))"
+  fi
 }
 
 check_one() {

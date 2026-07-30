@@ -112,7 +112,12 @@ describe("cachelane-healthcheck", () => {
     expect(runHealth({ CURL_FAIL_PORTS: "7332", SS_ACTIVE_PORTS: "7332" }).status).toBe(0);
 
     expect(lines(systemctlLog).filter((line) => line.startsWith("restart "))).toEqual([]);
-    expect(failureCount("cachelane-litellm.service")).toBe("3");
+    // Clamped to THRESHOLD-1, not left at 3. Left unclamped the count keeps
+    // climbing for as long as clients stay connected (observed live at 23/3),
+    // so the moment the last session disconnects a restart fires on hours-old
+    // evidence. Holding it one below threshold keeps the lane armed but forces
+    // one fresh failing probe against an idle lane before severing it.
+    expect(failureCount("cachelane-litellm.service")).toBe("2");
     expect(lines(loggerLog).join("\n")).toContain("restart deferred: active connections");
   });
 
@@ -131,7 +136,7 @@ describe("cachelane-healthcheck", () => {
     expect(runHealth({ CURL_FAIL_PORTS: "7333", SS_ACTIVE_PORTS: "7333" }).status).toBe(0);
 
     expect(lines(systemctlLog).filter((line) => line.startsWith("restart "))).toEqual([]);
-    expect(failureCount("cachelane-claude.service")).toBe("3");
+    expect(failureCount("cachelane-claude.service")).toBe("2");
   });
 
   it("starts an inactive service immediately", () => {

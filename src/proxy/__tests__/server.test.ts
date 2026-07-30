@@ -792,7 +792,9 @@ describe("proxy pipeline integration", () => {
       const res = await getRequest(proxyPort, "/healthz");
 
       expect(res.status).toBe(200);
-      expect(JSON.parse(res.body)).toEqual({ status: "ok" });
+      // /healthz never counts itself as work, so an otherwise-idle proxy must
+      // report inflight 0 — that zero is what drain logic waits on.
+      expect(JSON.parse(res.body)).toEqual({ status: "ok", inflight: 0 });
       expect(lastCaptured).toBeNull();
 
       const db = openDatabase(dbPath);

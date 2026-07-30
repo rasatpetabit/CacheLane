@@ -451,7 +451,25 @@ export function createProxyServer(
     path_prefix: opts.upstream?.path_prefix ?? config?.proxy.upstream_path_prefix ?? "",
   };
 
+  // In-flight request count. Drain decisions (installer restart, healthcheck
+  // deferral) must key off real work, not off established sockets: an HTTP
+  // keep-alive connection from an idle client stays ESTABLISHED indefinitely,
+  // so a socket-based drain check never reaches zero while any session is open.
+  // That made restarts impossible under load and left stale code running with a
+  // healthcheck failure counter armed to fire the moment the last client quit.
+  let inflight = 0;
+
   return http.createServer((req, res) => {
+    const pathForInflight = (req.url ?? "/").split("?")[0];
+    const countsAsWork = !(req.method === "GET" && pathForInflight === "/healthz");
+    if (countsAsWork) {
+      inflight += 1;
+      // "close" fires on both clean finish and abort, and exactly once per
+      // response, so it is the only correct place to decrement.
+      res.on("close", () => {
+        inflight -= 1;
+      });
+    }
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", async () => {
@@ -464,7 +482,9 @@ export function createProxyServer(
       // pruning, or SQLite. The system health timer uses this route so upstream
       // latency cannot trigger a false CacheLane restart.
       if (method === "GET" && pathOnly === "/healthz") {
-        const response = Buffer.from(JSON.stringify({ status: "ok" }));
+        // `inflight` lets callers drain on real work instead of on ESTABLISHED
+        // sockets, which idle keep-alive clients hold open forever.
+        const response = Buffer.from(JSON.stringify({ status: "ok", inflight }));
         res.writeHead(200, {
           "content-type": "application/json",
           "content-length": String(response.length),

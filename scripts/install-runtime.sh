@@ -21,8 +21,24 @@ cleanup_stage() {
 }
 trap cleanup_stage EXIT
 
+# Prefer the lane's own in-flight request count over ESTABLISHED sockets: an
+# idle client holding an HTTP keep-alive connection keeps the socket count above
+# zero indefinitely, so a socket-only drain check never succeeds while any
+# session is open. Fall back to the socket check when the running build predates
+# the inflight field, so an older lane still drains conservatively.
+inflight_requests() {
+  local port="$1" body
+  body="$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
+  [[ "$body" == *'"inflight"'* ]] || return 1
+  printf '%s' "$body" | sed -E 's/.*"inflight"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/'
+}
+
 has_active_connections() {
-  local port="$1" connections
+  local port="$1" connections inflight
+  if inflight="$(inflight_requests "$port")"; then
+    [[ "$inflight" != "0" ]]
+    return
+  fi
   connections="$(ss -Htn state established "( sport = :$port )" 2>/dev/null || true)"
   [[ -n "$connections" ]]
 }
