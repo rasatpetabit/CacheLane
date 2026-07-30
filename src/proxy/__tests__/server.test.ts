@@ -788,6 +788,26 @@ describe("proxy pipeline integration", () => {
   });
 
   describe("passthrough — non-messages paths", () => {
+    it("serves local healthz without upstream or DB work", async () => {
+      const res = await getRequest(proxyPort, "/healthz");
+
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ status: "ok" });
+      expect(lastCaptured).toBeNull();
+
+      const db = openDatabase(dbPath);
+      try {
+        const stats = db.getStats({
+          scope: "session",
+          workspace_id: "test-ws",
+          session_id: "test-session",
+        });
+        expect(stats.turns).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+
     it("prepends an upstream path prefix while still intercepting bare /v1/messages locally", async () => {
       const prefixedProxy = startProxy({
         port: 0,

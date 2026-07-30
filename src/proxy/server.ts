@@ -458,6 +458,20 @@ export function createProxyServer(
       const body = Buffer.concat(chunks);
       const method = req.method ?? "GET";
       const reqPath = req.url ?? "/";
+      const pathOnly = reqPath.split("?")[0];
+
+      // Process-local liveness must never depend on LiteLLM, provider adapters,
+      // pruning, or SQLite. The system health timer uses this route so upstream
+      // latency cannot trigger a false CacheLane restart.
+      if (method === "GET" && pathOnly === "/healthz") {
+        const response = Buffer.from(JSON.stringify({ status: "ok" }));
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "content-length": String(response.length),
+        });
+        res.end(response);
+        return;
+      }
 
       logger.info("incoming", JSON.stringify({ method, path: reqPath }));
 
@@ -465,7 +479,6 @@ export function createProxyServer(
       // ?beta=true and similar query params; matchRoute strips the query itself.
       // isBedrock is derived independently because the SigV4 signing path below
       // depends on it (a Bedrock /model/* request must be re-signed).
-      const pathOnly = reqPath.split("?")[0];
       const isBedrock = pathOnly?.startsWith("/model/");
       const adapter = selectAdapter(method, reqPath);
 
