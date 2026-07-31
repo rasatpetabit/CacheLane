@@ -594,6 +594,7 @@ export function createProxyServer(
           let prunedCount = 0;
           let prunedDecisions: import("../pruner/index.js").PruneDecision[] = [];
           let oaiPlacements: import("../pruner/index.js").PromptBlockPlacement[] = [];
+          let pruneFailed = false;
           if (config.features.k_pruner) {
             try {
               oaiPlacements = computeBlockPlacementsOpenAI(
@@ -629,6 +630,7 @@ export function createProxyServer(
               requestForHints = oaiRequest;
               prunedCount = 0;
               prunedDecisions = [];
+              pruneFailed = true;
             }
           }
           const normalized = adapter.normalizeRequest(requestForHints);
@@ -697,6 +699,28 @@ export function createProxyServer(
                   stable_count: 0,
                   semi_count: 0,
                   volatile_count: oaiRequest.messages.length,
+                },
+                // Without build_sha/config_hash this lane is unattributable: a
+                // regression cannot be tied to a build, because every OpenAI
+                // turn reads as untagged. The marker fields are empty by
+                // construction, not unknown — this path deliberately skips the
+                // Anthropic breakpoint pipeline, so no cache_control marker is
+                // ever planned or emitted, and no marker experiment runs.
+                provenance: {
+                  build_sha: buildSha ?? null,
+                  config_hash: configHash ?? null,
+                  experiment_arm: "prod",
+                  route: "proxy",
+                  outcome: pruneFailed ? "fallback" : "ok",
+                  usage_missing: true,
+                  incoming_markers: [],
+                  emitted_markers: [],
+                  prefix_hash_at_bp: [prefixHash],
+                  prune_transforms: prunedDecisions.map((decision) => ({
+                    block_id: decision.block_id,
+                    original_tokens: decision.original_tokens,
+                    stub_tokens: decision.stub_tokens,
+                  })),
                 },
                 signals: finalSignals,
                 created_at: now,

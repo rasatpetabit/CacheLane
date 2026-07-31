@@ -14,6 +14,7 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { startProxy } from "../server.js";
 import { selectAdapter } from "../../providers/registry.js";
@@ -197,6 +198,39 @@ describe("openai pipeline — forwarded request", () => {
     const forwarded = JSON.parse(lastCaptured!.body) as { prompt_cache_key?: string };
     expect(typeof forwarded.prompt_cache_key).toBe("string");
     expect(forwarded.prompt_cache_key).toMatch(/^cachelane-/);
+  });
+
+  // Regression: the OpenAI branch wrote a turn explanation with no `provenance`
+  // at all, so the column fell back to its '{}' default. In production that left
+  // 7,856 of 7,856 LiteLLM-lane turns untagged — a regression on that lane could
+  // not be attributed to a build, because no turn carried one.
+  it("records build-attributable provenance on the OpenAI path", async () => {
+    const res = await postChat(proxyPort, JSON.stringify(buildOpenAIRequest()));
+    expect(res.status).toBe(200);
+
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT provenance_json FROM turn_explanations ORDER BY id DESC LIMIT 1")
+        .get() as { provenance_json: string } | undefined;
+      expect(row).toBeDefined();
+
+      const provenance = JSON.parse(row!.provenance_json) as Record<string, unknown>;
+      expect(typeof provenance.build_sha).toBe("string");
+      expect((provenance.build_sha as string).length).toBeGreaterThan(0);
+      expect(provenance.route).toBe("proxy");
+      expect(provenance.outcome).toBe("ok");
+
+      // Empty by construction, not unknown: this path never plans or emits an
+      // Anthropic cache_control marker, so asserting [] is the honest contract.
+      expect(provenance.incoming_markers).toEqual([]);
+      expect(provenance.emitted_markers).toEqual([]);
+      // The OpenAI prefix hash is real and drives prompt_cache_key.
+      expect(Array.isArray(provenance.prefix_hash_at_bp)).toBe(true);
+      expect((provenance.prefix_hash_at_bp as string[]).length).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
   });
 
   it("never injects Anthropic cache_control anywhere in the forwarded body", async () => {
