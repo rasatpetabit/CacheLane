@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { CacheTier, PrefixState } from "../types/index.js";
 import { findWriteFrontier } from "./frontier.js";
+import { normalizeBlocks } from "./content-shape.js";
 import type {
   AnthropicCacheControl,
   AnthropicMessageContent,
@@ -60,11 +61,11 @@ function hashPayload(
     marker_topology: markerTopology ?? null,
     // Only API-level blocks own cache_control. Tool schemas are opaque and may
     // legitimately contain a property with that name.
-    tools: (request.tools ?? []).map(providerBlock),
-    system: (request.system ?? []).map(providerBlock),
+    tools: normalizeBlocks(request.tools).map(providerBlock),
+    system: normalizeBlocks(request.system).map(providerBlock),
     messages: messageEnd === null ? [] : request.messages.slice(0, messageEnd + 1).map((message, index) => ({
       ...message,
-      content: message.content
+      content: normalizeBlocks(message.content)
         .slice(0, index === messageEnd && contentEnd !== undefined ? contentEnd + 1 : undefined)
         .map(providerBlock),
     })),
@@ -83,7 +84,7 @@ export function cumulativePrefixHash(
 function clientMarkers(request: AnthropicMessagesRequest): ClientMarker[] {
   const out: ClientMarker[] = [];
   request.messages.forEach((message, mi) => {
-    message.content.forEach((content: AnthropicMessageContent, ci) => {
+    normalizeBlocks(message.content).forEach((content: AnthropicMessageContent, ci) => {
       if (content.cache_control) out.push({ message_index: mi, content_index: ci, ttl: content.cache_control.ttl });
     });
   });

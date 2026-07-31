@@ -9,6 +9,7 @@ import type {
   RegionBoundaries,
 } from "./types.js";
 import { markerControl, type MarkerPlan } from "./marker-planner.js";
+import { normalizeBlocks } from "./content-shape.js";
 
 function isToolUse(c: AnthropicMessageContent): c is AnthropicToolUseContent {
   return c.type === "tool_use";
@@ -47,7 +48,14 @@ export function mutateRequest(
 
   const out: AnthropicMessagesRequest = {
     ...originalRequest,
-    system: originalRequest.system?.map((s) => ({ ...stripCc(s) })),
+    // Anthropic API allows system as a plain string. Normalise it to the
+    // equivalent single text block: cache_control can only attach to a block,
+    // so leaving it a string both crashes the marker pass (which indexes into
+    // it) and makes the system prefix — the main cache target — uncacheable.
+    // Absent stays absent; only a present string is promoted.
+    system: originalRequest.system === undefined
+      ? undefined
+      : normalizeBlocks(originalRequest.system).map((s) => ({ ...stripCc(s) })),
     tools: originalRequest.tools?.map((t) => ({ ...stripCc(t) })),
     messages: originalRequest.messages.map((m) => {
       // Anthropic API allows content as a plain string; skip deep-copy in that case

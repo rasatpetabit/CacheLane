@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDatabase, type CachelaneDb } from "../storage/index.js";
@@ -20,6 +18,7 @@ import {
   type CachelaneMcpContext,
 } from "./tools.js";
 import { healthInputSchema, handleHealthTool } from "./health.js";
+import { cachelaneDbPath, cachelaneConfigPath } from "../cli/paths.js";
 
 export type {
   CachelaneMcpContext,
@@ -44,12 +43,15 @@ export interface StartCachelaneStdioServerOptions {
   session_id?: string;
 }
 
+// Must honour CACHELANE_HOME: dual-home deploys run one MCP server per lane
+// (Claude/Anthropic vs Pi/LiteLLM). Hardcoding ~/.cachelane made both servers
+// read the Claude lane's DB, so the LiteLLM lane reported the wrong stats.
 export function defaultCachelaneDbPath(): string {
-  return path.join(homedir(), ".cachelane", "cachelane.db");
+  return cachelaneDbPath();
 }
 
 export function defaultCachelaneConfigPath(): string {
-  return path.join(homedir(), ".cachelane", "config.json");
+  return cachelaneConfigPath();
 }
 
 export function createCachelaneMcpServer(

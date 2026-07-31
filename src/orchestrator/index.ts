@@ -12,6 +12,7 @@ import { findRegionBoundaries } from "./region-boundaries.js";
 import { placeBreakpoints } from "./breakpoint-placer.js";
 import { mutateRequest } from "./request-mutator.js";
 import { planMarkers } from "./marker-planner.js";
+import { normalizeBlocks } from "./content-shape.js";
 
 export type {
   AnthropicCacheControl,
@@ -36,14 +37,14 @@ const TTL_MS: Record<CacheTier, number> = {
 
 function markerTopology(request: AnthropicMessagesRequest): MarkerTopologyEntry[] {
   const topology: MarkerTopologyEntry[] = [];
-  for (const [index, tool] of (request.tools ?? []).entries()) {
+  for (const [index, tool] of normalizeBlocks(request.tools).entries()) {
     if (tool.cache_control) topology.push({ location: "tool", index: String(index), ttl: tool.cache_control.ttl });
   }
-  for (const [index, block] of (request.system ?? []).entries()) {
+  for (const [index, block] of normalizeBlocks(request.system).entries()) {
     if (block.cache_control) topology.push({ location: "system", index: String(index), ttl: block.cache_control.ttl });
   }
   for (const [messageIndex, message] of request.messages.entries()) {
-    for (const [contentIndex, block] of message.content.entries()) {
+    for (const [contentIndex, block] of normalizeBlocks(message.content).entries()) {
       if (block.cache_control) topology.push({
         location: "message",
         index: `${messageIndex}:${contentIndex}`,

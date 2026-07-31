@@ -1,4 +1,5 @@
 import type { AnthropicMessage, AnthropicMessageContent } from "./types.js";
+import { normalizeBlocks } from "./content-shape.js";
 
 export interface MessageFrontier {
   message_index: number;
@@ -6,11 +7,11 @@ export interface MessageFrontier {
 }
 
 function toolUseIds(content: AnthropicMessageContent[]): Set<string> {
-  return new Set(content.filter((c) => c.type === "tool_use").map((c) => c.id));
+  return new Set(normalizeBlocks(content).filter((c) => c.type === "tool_use").map((c) => c.id));
 }
 
 function toolResultIds(content: AnthropicMessageContent[]): Set<string> {
-  return new Set(content.filter((c) => c.type === "tool_result").map((c) => c.tool_use_id));
+  return new Set(normalizeBlocks(content).filter((c) => c.type === "tool_result").map((c) => c.tool_use_id));
 }
 
 function hasUnmatchedToolResult(messages: AnthropicMessage[], index: number): boolean {
