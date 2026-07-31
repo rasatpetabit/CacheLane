@@ -122,6 +122,9 @@ export function orchestrate(
         middle_hash: writeFrontier?.cumulative_hash ?? null,
         middle_message_index: writeFrontier?.message_index,
         middle_content_index: writeFrontier?.content_index,
+        middle_marker_topology: writeFrontier
+          ? markerTopology(mutated).map((marker) => ({ ...marker }))
+          : undefined,
         prefix_token_count: tokenCount,
         ttl_class: ttlClass,
         cached_at_ms: now,

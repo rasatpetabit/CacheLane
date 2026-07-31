@@ -44,6 +44,12 @@ export interface PrefixState {
   /** Last provider-visible message frontier written by CacheLane. Optional on legacy state. */
   middle_message_index?: number;
   middle_content_index?: number;
+  /** Final provider-visible marker topology used to compute middle_hash. */
+  middle_marker_topology?: Array<{
+    location: "tool" | "system" | "message";
+    index: string;
+    ttl: CacheTier;
+  }>;
   prefix_token_count: number;
   ttl_class: CacheTier;
   cached_at_ms: number;

@@ -53,9 +53,11 @@ function hashPayload(
   request: AnthropicMessagesRequest,
   messageEnd: number | null,
   contentEnd?: number,
+  markerTopology?: PrefixState["middle_marker_topology"],
 ): unknown {
   return {
     model: request.model,
+    marker_topology: markerTopology ?? null,
     // Only API-level blocks own cache_control. Tool schemas are opaque and may
     // legitimately contain a property with that name.
     tools: (request.tools ?? []).map(providerBlock),
@@ -73,8 +75,9 @@ export function cumulativePrefixHash(
   request: AnthropicMessagesRequest,
   messageEnd: number | null,
   contentEnd?: number,
+  markerTopology?: PrefixState["middle_marker_topology"],
 ): string {
-  return createHash("sha256").update(canonical(hashPayload(request, messageEnd, contentEnd))).digest("hex");
+  return createHash("sha256").update(canonical(hashPayload(request, messageEnd, contentEnd, markerTopology))).digest("hex");
 }
 
 function clientMarkers(request: AnthropicMessagesRequest): ClientMarker[] {
@@ -129,7 +132,12 @@ export function planMarkers(
   const anchorContentValid = anchorMessage && deepest && deepest.content_index >= 0 &&
     deepest.content_index < anchorMessage.content.length;
   const anchorHash = deepest && anchorContentValid
-    ? cumulativePrefixHash(request, deepest.message_index, deepest.content_index)
+    ? cumulativePrefixHash(
+        request,
+        deepest.message_index,
+        deepest.content_index,
+        previous?.middle_marker_topology,
+      )
     : null;
   // Client-marker provenance has no persisted CacheLane hash to validate.
   // Persisted CacheLane frontiers do: never reuse them after history edits.
@@ -149,12 +157,27 @@ export function planMarkers(
   }
 
   if (frontier) {
+    const finalTopology: NonNullable<PrefixState["middle_marker_topology"]> = [
+      ...markers.map((marker) => ({
+        location: marker.location,
+        index: marker.location === "message"
+          ? `${marker.message_index}:${marker.content_index}`
+          : String(marker.tool_index ?? marker.system_index),
+        ttl: marker.ttl,
+      })),
+      { location: "message", index: `${frontier.message_index}:${frontier.content_index}`, ttl: "5m" },
+    ];
     markers.push({
       location: "message",
       ...frontier,
       ttl: "5m",
       role: "write_frontier",
-      cumulative_hash: cumulativePrefixHash(request, frontier.message_index, frontier.content_index),
+      cumulative_hash: cumulativePrefixHash(
+        request,
+        frontier.message_index,
+        frontier.content_index,
+        finalTopology,
+      ),
     });
   }
 

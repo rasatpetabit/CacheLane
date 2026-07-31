@@ -30,6 +30,13 @@ export function candidatePrefixState(
     middle_hash: frontier.cumulative_hash,
     middle_message_index: frontier.message_index,
     middle_content_index: frontier.content_index,
+    middle_marker_topology: planned.plan.markers.map((marker) => ({
+      location: marker.location,
+      index: marker.location === "message"
+        ? `${marker.message_index}:${marker.content_index}`
+        : String(marker.tool_index ?? marker.system_index),
+      ttl: marker.ttl,
+    })),
     prefix_token_count: 0,
     ttl_class: frontier.ttl,
     cached_at_ms: now,

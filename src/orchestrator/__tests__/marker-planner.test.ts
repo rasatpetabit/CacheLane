@@ -97,6 +97,40 @@ describe("planMarkers", () => {
     expect(p.markers.map((marker) => marker.role)).toEqual(["static_prefix", "write_frontier"]);
   });
 
+  it("invalidates a persisted anchor when its emitted TTL topology changes", () => {
+    const original = request([
+      { role: "user", content: [{ type: "text", text: "u1" }] },
+      { role: "assistant", content: [{ type: "text", text: "a1" }] },
+      { role: "user", content: [{ type: "text", text: "u2" }] },
+      { role: "assistant", content: [{ type: "text", text: "a2" }] },
+      { role: "user", content: [{ type: "text", text: "u3" }] },
+    ]);
+    const priorTopology = [
+      { location: "system" as const, index: "0", ttl: "5m" as const },
+      { location: "message" as const, index: "1:0", ttl: "5m" as const },
+    ];
+    const priorHash = cumulativePrefixHash(original, 1, 0, priorTopology);
+
+    const p = planMarkers(original, "5m", {
+      workspace_id: "w",
+      prefix_hash: "p",
+      middle_hash: priorHash,
+      middle_message_index: 1,
+      middle_content_index: 0,
+      middle_marker_topology: [
+        ...priorTopology.slice(0, 1),
+        { location: "message", index: "1:0", ttl: "1h" },
+      ],
+      prefix_token_count: 10,
+      ttl_class: "5m",
+      cached_at_ms: 0,
+      last_read_at_ms: 0,
+      expected_expiry_ms: 1,
+    });
+
+    expect(p.markers.some((marker) => marker.role === "read_anchor")).toBe(false);
+  });
+
   it("keeps a persisted content-boundary hash valid when only later content changes", () => {
     const original = request([
       { role: "user", content: [{ type: "text", text: "u1" }] },
@@ -108,7 +142,11 @@ describe("planMarkers", () => {
       { role: "assistant", content: [{ type: "text", text: "a2" }] },
       { role: "user", content: [{ type: "text", text: "u3" }] },
     ]);
-    const priorHash = cumulativePrefixHash(original, 1, 0);
+    const priorTopology = [
+      { location: "system" as const, index: "0", ttl: "5m" as const },
+      { location: "message" as const, index: "1:0", ttl: "5m" as const },
+    ];
+    const priorHash = cumulativePrefixHash(original, 1, 0, priorTopology);
     const changedAfterBoundary = structuredClone(original);
     changedAfterBoundary.messages[1]!.content[1] = { type: "text", text: "suffix-b" };
 
@@ -118,6 +156,7 @@ describe("planMarkers", () => {
       middle_hash: priorHash,
       middle_message_index: 1,
       middle_content_index: 0,
+      middle_marker_topology: priorTopology,
       prefix_token_count: 10,
       ttl_class: "5m",
       cached_at_ms: 0,
