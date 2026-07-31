@@ -76,6 +76,17 @@ const moving = [...anchor.map((m) => structuredClone(m)), message("user", "stabl
 delete moving[0].content[0].cache_control;
 const p1b = await run("moving_within_lookback", "single_deeper_write", { messages: [...moving, message("user", "p1-b")] });
 const p1c = await run("moving_within_lookback", "single_deeper_read", { messages: [...moving, message("user", "p1-c")] });
+// P1b: move the breakpoint beyond Anthropic's documented 20-block lookback.
+// Retaining the original anchor should still allow the deeper frontier to reuse
+// the cached prefix, while a single moving marker would not be discoverable.
+const beyondLookback = [message("user", stable, marker5m)];
+for (let i = 0; i < 11; i++) {
+  beyondLookback.push(message("assistant", `lookback-answer-${i}`));
+  beyondLookback.push(message("user", `lookback-question-${i}`));
+}
+beyondLookback.push(message("assistant", "lookback-frontier", marker5m));
+const p1d = await run("moving_beyond_lookback", "frontier_write", { messages: [...beyondLookback, message("user", "p1-d")] });
+const p1e = await run("moving_beyond_lookback", "frontier_read", { messages: [...beyondLookback, message("user", "p1-e")] });
 const retained = [...anchor.map((m) => structuredClone(m)), message("user", "retained exchange"), message("assistant", "complete", marker5m)];
 const p3a = await run("retained_anchor_frontier", "frontier_write", { messages: [...retained, message("user", "p3-a")] });
 const p3b = await run("retained_anchor_frontier", "frontier_read", { messages: [...retained, message("user", "p3-b")] });
@@ -131,6 +142,7 @@ const read = (row) => row.usage.cache_read_input_tokens ?? 0;
 const create = (row) => row.usage.cache_creation_input_tokens ?? 0;
 const gates = {
   moving_within_lookback: p1a.status === 200 && p1b.status === 200 && p1c.status === 200 && read(p1c) > 0,
+  moving_beyond_lookback: p1d.status === 200 && p1e.status === 200 && read(p1e) > 0,
   breakpoint_limit_enforced: p2.status === 400,
   retained_anchor_frontier: p3a.status === 200 && p3b.status === 200 && read(p3b) > read(p1a),
   parallel_tools: p4a.status === 200 && p4b.status === 200 && read(p4b) > 0,
@@ -141,7 +153,7 @@ const gates = {
   cc_shaped_growth: p7a.status === 200 && p7b.status === 200 && p7c.status === 200 && read(p7c) > read(p7b),
 };
 const report = {
-  ts: new Date().toISOString(), model, probe_version: 2,
+  ts: new Date().toISOString(), model, probe_version: 3,
   salt_sha256: createHash("sha256").update(salt).digest("hex"),
   results, gates,
 };

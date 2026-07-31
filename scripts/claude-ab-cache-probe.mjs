@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { countTokens, planAndApplyMarkers } from "../dist/index.js";
 
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? (process.argv[i + 1] ?? fallback) : fallback; };
 const sessions = Number(arg("--sessions", "3"));
@@ -12,6 +13,7 @@ const model = arg("--model", "claude-haiku-4-5-20251001");
 const out = arg("--out", join(homedir(), ".cachelane-ops", `claude-ab-${Date.now()}.json`));
 const token = JSON.parse(readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8"))?.claudeAiOauth?.accessToken;
 if (typeof token !== "string" || token.length < 10) throw new Error("Claude OAuth token unavailable");
+const requestDelayMs = Number(arg("--delay-ms", "1500"));
 const marker = { type: "ephemeral", ttl: "5m" };
 const content = (text, cached = false) => ({ type: "text", text, ...(cached ? { cache_control: marker } : {}) });
 
@@ -39,22 +41,23 @@ function applyArm(arm, stable, completedHistory, currentTurn) {
     // completed assistant response as a moving conversation breakpoint.
     const latestAssistant = messages.findLastIndex((m) => m.role === "assistant");
     if (latestAssistant >= 0) messages[latestAssistant].content.at(-1).cache_control = marker;
-  } else if (arm === "candidate") {
-    // Planner topology: retain immediately previous frontier and write a new one.
-    const assistants = messages.map((m, i) => ({ m, i })).filter(({ m }) => m.role === "assistant").map(({ i }) => i);
-    if (assistants.length >= 2) messages[assistants.at(-2)].content.at(-1).cache_control = marker;
-    if (assistants.length >= 1) messages[assistants.at(-1)].content.at(-1).cache_control = marker;
   }
-  // prefix_only deliberately has only the system marker.
   messages.push({ role: "user", content: [content(`current-${currentTurn}`)] });
-  return { model, max_tokens: 1, system, messages };
+  const body = { model, max_tokens: 1, system, messages };
+  if (arm === "candidate") return planAndApplyMarkers(body, "candidate").request;
+  if (arm === "prefix_only") return planAndApplyMarkers(body, "prefix_only").request;
+  return body;
 }
 
 async function runArm(arm, session) {
   const salt = `${arm}-${session}-${randomUUID()}`;
-  // Fixed token-count isolation salt: arms differ in bytes, not prefix length.
+  // Use byte-distinct isolation words that the project tokenizer confirms have
+  // equal token counts. The gate below still checks every generated prefix.
   const saltHash = createHash("sha256").update(salt).digest("hex");
-  const stable = `CacheLane controlled stable context ${saltHash}. `.repeat(500);
+  const isolationWords = ["alpha", "beta", "gamma", "delta", "epsilon", "theta", "kappa", "lambda", "sigma"];
+  const isolationIndex = session - 1 + ["passthrough", "prefix_only", "candidate"].indexOf(arm) * sessions;
+  const stable = `CacheLane controlled stable context ${isolationWords[isolationIndex]}. `.repeat(3000);
+  const stable_prefix_tokens = countTokens(stable, model);
   const history = [];
   const rows = [];
   for (let turn = 1; turn <= turns; turn++) {
@@ -63,6 +66,7 @@ async function runArm(arm, session) {
       history.push({ role: "assistant", content: [content(`answer-${turn - 1}`)] });
     }
     const body = applyArm(arm, stable, history, turn);
+    if (requestDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, requestDelayMs));
     const result = await call(body);
     const u = result.usage ?? {};
     rows.push({
@@ -77,7 +81,7 @@ async function runArm(arm, session) {
       error: result.error,
     });
   }
-  return { arm, session, salt_sha256: saltHash, rows };
+  return { arm, session, salt_sha256: saltHash, stable_prefix_tokens, rows };
 }
 
 const runs = [];
@@ -104,8 +108,13 @@ const gates = {
   no_errors: Object.values(summary).every((s) => s.errors === 0),
   candidate_not_worse_than_passthrough: summary.candidate.effective <= summary.passthrough.effective * 1.05,
   candidate_beats_prefix_only: summary.candidate.effective < summary.prefix_only.effective,
+  equal_stable_prefix_tokens: new Set(runs.map((run) => run.stable_prefix_tokens)).size === 1,
   candidate_grows_beyond_static_prefix: summary.candidate.late_read_medians.filter(
-    (value, index) => value > runs.find((run) => run.arm === "candidate" && run.session === index + 1)?.rows[0]?.read,
+    (value, index) => {
+      const run = runs.find((candidate) => candidate.arm === "candidate" && candidate.session === index + 1);
+      const staticCreation = run?.rows[0]?.create_5m ?? 0;
+      return value > staticCreation;
+    },
   ).length >= 2,
   distinct_arm_topologies: JSON.stringify(summary.passthrough.topologies) !== JSON.stringify(summary.prefix_only.topologies) && JSON.stringify(summary.candidate.topologies) !== JSON.stringify(summary.prefix_only.topologies),
 };

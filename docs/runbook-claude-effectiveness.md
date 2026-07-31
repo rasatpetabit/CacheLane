@@ -21,7 +21,7 @@ node scripts/anthropic-cache-conformance.mjs \
 
 The suite uses Claude OAuth directly and covers moving breakpoints, the four-breakpoint limit, retained anchors, parallel tools/results, legal and illegal TTL ordering, prune/stub invalidation, and Claude-Code-shaped pass-through growth. Any false gate blocks candidate deployment.
 
-Verified 2026-07-31 with `claude-haiku-4-5-20251001`: all nine gates passed. Durable evidence: `~/.cachelane-ops/conformance-2026-07-31-v2.json`.
+Verified 2026-07-31 with `claude-haiku-4-5-20251001`: all ten v3 gates passed, including the >20-block retained-anchor case. Durable evidence: `~/.cachelane-ops/conformance-2026-07-31-v3.json`.
 
 ## Three-arm gate
 
@@ -33,7 +33,7 @@ node scripts/claude-ab-cache-probe.mjs \
 
 Each arm/session receives a byte-distinct but token-length-matched stable prefix. The report records marker topology on every request. Candidate passes only when it has no provider errors, is within 5% of Claude Code pass-through, beats prefix-only cost, grows reads beyond its static prefix, and emits distinct topologies.
 
-Verified corrected run 2026-07-31: all five gates passed. Durable evidence: `~/.cachelane-ops/claude-ab-2026-07-31-v4.json`. Earlier v2/v3 files are failed experimental runs and are not acceptance evidence.
+The earlier v4 run passed the old gates but is superseded because its candidate arm approximated rather than executed the production planner. Corrected production-planner attempts v5–v7 were blocked by Anthropic OAuth rate limits (`429` on nearly every request); they are failure evidence, not acceptance evidence. Candidate deployment remains blocked until a fresh corrected run passes all gates.
 
 ## Stats and snapshots
 

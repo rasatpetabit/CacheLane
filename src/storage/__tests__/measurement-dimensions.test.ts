@@ -110,6 +110,13 @@ describe("measurement dimensions", () => {
     });
   });
 
+  it("counts unclassified routes in the other bucket", () => {
+    db.insertTurn(turn("t1", { signals: JSON.stringify(["mode:other"]) }));
+
+    const stats = db.getStats({ scope: "all" });
+    expect(stats.route_counts).toEqual({ proxy: 0, hook: 0, other: 1 });
+  });
+
   it("treats usage presence as explicit provenance, not a zero-token heuristic", () => {
     db.insertTurn(turn("t1", {
       input_tokens: 0,

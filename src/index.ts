@@ -8,6 +8,13 @@ export type { PostResponseInput, PostResponseResult } from "./hooks/post-respons
 export { openDatabase } from "./storage/index.js";
 export type { CachelaneDb } from "./storage/index.js";
 export { loadConfig } from "./config/index.js";
+export { planAndApplyMarkers } from "./orchestrator/public-marker-planner.js";
+export type {
+  PlannedRequest,
+  PublicMarkerStrategy,
+} from "./orchestrator/public-marker-planner.js";
+export type { AnthropicMessagesRequest } from "./orchestrator/types.js";
+export { countTokens } from "./tokenizer/index.js";
 
 // Core domain types
 export type {

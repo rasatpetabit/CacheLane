@@ -199,7 +199,7 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 
 - [x] **Step 1: Implement initial structured probe** (`scripts/anthropic-cache-conformance.mjs`)
 - [x] **Step 2: Run retained-anchor/deeper-frontier probe** (2026-07-31, Haiku 4.5): write=20,305 creation; anchor read=20,305; deeper write=20,305 read + 22 creation; deeper read=20,327. HTTP 200 for all. Durable production-path result still required under `~/.cachelane-ops/` before deploy.
-- [x] **Step 3: Complete remaining mandatory probes** (moving-within-lookback, block-limit enforcement, parallel tools, all TTL combinations, prune/stub invalidation, CC-shaped pass-through markers). All nine gates passed 2026-07-31; evidence `~/.cachelane-ops/conformance-2026-07-31-v2.json`.
+- [x] **Step 3: Complete remaining mandatory probes** (moving within and beyond the 20-block lookback, block-limit enforcement, parallel tools, all TTL combinations, prune/stub invalidation, CC-shaped pass-through markers). All ten v3 gates passed 2026-07-31; evidence `~/.cachelane-ops/conformance-2026-07-31-v3.json`.
 - [x] **Step 4: Narrow algorithm gate** — passed only for retained old anchor + new frontier. This does *not* approve the single-moving-marker variant or production deployment.
 
 ### Task 0.5: Instrumentation soak
@@ -283,7 +283,7 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 
 - [x] **Step 1: Implement corrected harness with distinct CC-shaped/pass-through, prefix-only, and planner topologies**
 - [x] **Step 2: Run direct against Anthropic OAuth**
-- [x] **Step 3: Record results and gate** — all five corrected gates passed; evidence `~/.cachelane-ops/claude-ab-2026-07-31-v4.json`.
+- [ ] **Step 3: Record results and gate** — v4 is superseded because it approximated the candidate planner. Production-planner v5–v7 attempts are failed rate-limit evidence (`429`), not acceptance evidence. Rerun after the provider limit clears.
 
 ---
 
