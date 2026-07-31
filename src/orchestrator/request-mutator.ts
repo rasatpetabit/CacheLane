@@ -8,6 +8,7 @@ import type {
   PrefixState,
   RegionBoundaries,
 } from "./types.js";
+import { markerControl, type MarkerPlan } from "./marker-planner.js";
 
 function isToolUse(c: AnthropicMessageContent): c is AnthropicToolUseContent {
   return c.type === "tool_use";
@@ -17,18 +18,23 @@ function isToolResult(c: AnthropicMessageContent): c is AnthropicToolResultConte
   return c.type === "tool_result";
 }
 
-const MIDDLE_MARKER: AnthropicCacheControl = Object.freeze({ type: "ephemeral", ttl: "5m" });
-
 export function mutateRequest(
   originalRequest: AnthropicMessagesRequest,
   boundaries: RegionBoundaries,
   breakpoints: Breakpoints,
   prefixTtl: PrefixState["ttl_class"] = "5m",
+  markerPlan?: MarkerPlan,
 ): AnthropicMessagesRequest {
   const prefixMarker: AnthropicCacheControl = {
     type: "ephemeral",
     ttl: prefixTtl,
   };
+  // Legacy callers/tests that do not supply a plan retain the old breakpoint
+  // contract. The orchestrator supplies an explicit plan for production paths.
+  const plan = markerPlan;
+  if (plan?.strategy === "fail_preserve_client") {
+    return structuredClone(originalRequest);
+  }
   // Strip ALL existing cache_control markers before placing CacheLane's own.
   // Claude Code pre-populates its own 5m markers; leaving them in creates
   // ordering violations when CacheLane places a 1h prefix marker after them
@@ -88,31 +94,39 @@ export function mutateRequest(
     }
   }
 
-  // Prefix breakpoint: place on the LAST system block when present, else the last
-  // tool. Anthropic's cache order is tools → system → messages, and a breakpoint
-  // caches everything up to and including the marked block. Marking the last system
-  // block therefore caches BOTH tools and system; marking the last tool would leave
-  // the (often large, stable) system prompt uncached. Falls back to the last tool
-  // when there are no system blocks.
-  if (out.system && out.system.length > 0) {
-    const lastSystem = out.system.at(-1);
-    if (lastSystem) lastSystem.cache_control = prefixMarker;
-  } else if (out.tools && out.tools.length > 0) {
-    const lastTool = out.tools.at(-1);
-    if (lastTool) lastTool.cache_control = prefixMarker;
-  }
-
-  // Middle breakpoint: marker on the last content item of the last SEMI message.
-  if (
-    breakpoints.include_middle_breakpoint &&
-    boundaries.middle_end_in_messages !== null &&
-    boundaries.middle_end_in_messages > 0
-  ) {
-    const lastSemiIdx = boundaries.middle_end_in_messages - 1;
-    const msg = out.messages[lastSemiIdx];
-    if (msg && Array.isArray(msg.content) && msg.content.length > 0) {
-      const lastContent = msg.content.at(-1);
-      if (lastContent) lastContent.cache_control = MIDDLE_MARKER;
+  if (plan) {
+    for (const marker of plan.markers) {
+      const control = markerControl(marker.ttl);
+      if (marker.location === "system" && marker.system_index !== undefined) {
+        const block = out.system?.[marker.system_index];
+        if (block) block.cache_control = control;
+      } else if (marker.location === "tool" && marker.tool_index !== undefined) {
+        const tool = out.tools?.[marker.tool_index];
+        if (tool) tool.cache_control = control;
+      } else if (
+        marker.location === "message" &&
+        marker.message_index !== undefined &&
+        marker.content_index !== undefined
+      ) {
+        const content = out.messages[marker.message_index]?.content[marker.content_index];
+        if (content) content.cache_control = control;
+      }
+    }
+  } else {
+    if (out.system && out.system.length > 0) {
+      const lastSystem = out.system.at(-1);
+      if (lastSystem) lastSystem.cache_control = prefixMarker;
+    } else if (out.tools && out.tools.length > 0) {
+      const lastTool = out.tools.at(-1);
+      if (lastTool) lastTool.cache_control = prefixMarker;
+    }
+    if (
+      breakpoints.include_middle_breakpoint &&
+      boundaries.middle_end_in_messages !== null &&
+      boundaries.middle_end_in_messages > 0
+    ) {
+      const content = out.messages[boundaries.middle_end_in_messages - 1]?.content.at(-1);
+      if (content) content.cache_control = markerControl("5m");
     }
   }
 

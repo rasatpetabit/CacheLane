@@ -41,6 +41,9 @@ export interface PrefixState {
   workspace_id: string;
   prefix_hash: string;
   middle_hash: string | null;
+  /** Last provider-visible message frontier written by CacheLane. Optional on legacy state. */
+  middle_message_index?: number;
+  middle_content_index?: number;
   prefix_token_count: number;
   ttl_class: CacheTier;
   cached_at_ms: number;

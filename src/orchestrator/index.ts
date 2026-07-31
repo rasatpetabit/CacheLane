@@ -6,6 +6,7 @@ import { CacheStateTracker } from "./cache-state-tracker.js";
 import { findRegionBoundaries } from "./region-boundaries.js";
 import { placeBreakpoints } from "./breakpoint-placer.js";
 import { mutateRequest } from "./request-mutator.js";
+import { planMarkers } from "./marker-planner.js";
 
 export type {
   AnthropicCacheControl,
@@ -67,18 +68,23 @@ export function orchestrate(
     );
     const tokenCount = prefixTokenCount(input);
     const ttlClass = ttlForPrefix(tokenCount, keepaliveConfig);
+    const markerPlan = planMarkers(input.original_request, ttlClass, prevState);
     const mutated = mutateRequest(
       input.original_request,
       boundaries,
       breakpoints,
       ttlClass,
+      markerPlan,
     );
 
     const now = Date.now();
+    const writeFrontier = markerPlan.markers.find((marker) => marker.role === "write_frontier");
     tracker.update(input.workspace_id, input.session_id, {
       workspace_id: input.workspace_id,
       prefix_hash: breakpoints.prefix_hash,
-      middle_hash: breakpoints.middle_hash,
+      middle_hash: writeFrontier?.cumulative_hash ?? null,
+      middle_message_index: writeFrontier?.message_index,
+      middle_content_index: writeFrontier?.content_index,
       prefix_token_count: tokenCount,
       ttl_class: ttlClass,
       cached_at_ms: now,
@@ -87,13 +93,10 @@ export function orchestrate(
       keepalive_pings_since_last_turn: 0,
     });
 
-    const didMutate =
-      mutated.tools?.at(-1)?.cache_control !== undefined ||
-      mutated.system?.at(-1)?.cache_control !== undefined;
+    const didMutate = markerPlan.strategy !== "fail_preserve_client" &&
+      markerPlan.markers.length > 0;
 
-    const signals: MutatedRequest["signals"] = breakpoints.include_middle_breakpoint
-      ? ["prefix_cached", "middle_cached"]
-      : ["prefix_cached"];
+    const signals: MutatedRequest["signals"] = markerPlan.signals;
 
     console.error("[cachelane] orchestrate", {
       prefix_changed: prevState?.prefix_hash !== breakpoints.prefix_hash,
@@ -106,7 +109,8 @@ export function orchestrate(
       request: mutated,
       mutated: didMutate,
       prefix_hash: breakpoints.prefix_hash,
-      middle_hash: breakpoints.middle_hash,
+      middle_hash:
+        markerPlan.markers.find((marker) => marker.role === "write_frontier")?.cumulative_hash ?? null,
       signals,
       keepalive_pings_since_last_turn: keepalivePings,
     };

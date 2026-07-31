@@ -197,9 +197,9 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 6. **Prune/stub between turns** — same marker depth after early tool_result → stub; measure cache invalidation.
 7. **CC-shaped markers alone** — pass-through of Claude Code markers without CacheLane mutation (baseline growth curve).
 
-- [ ] **Step 1: Implement probes with structured JSON results**
-- [ ] **Step 2: Run and file results under `~/.cachelane-ops/conformance-*.json`**
-- [ ] **Step 3: Gate** — if probe (1) fails (moving BP never reuses prior cache), **do not implement Phase 1 candidate**; redesign (retained anchors, different frontier, or stop stripping CC markers only).
+- [x] **Step 1: Implement probes with structured JSON results** (`scripts/anthropic-cache-conformance.mjs`)
+- [x] **Step 2: Run initial retained-anchor/deeper-frontier probe** (2026-07-31, Haiku 4.5): write=20,305 creation; anchor read=20,305; deeper write=20,305 read + 22 creation; deeper read=20,327. HTTP 200 for all. Durable production-path result still required under `~/.cachelane-ops/` before deploy.
+- [x] **Step 3: Gate** — **passed for retained old anchor + new frontier**. This does *not* approve the single-moving-marker variant; Phase 1 must implement the retained-anchor/write-frontier strategy proven by this probe.
 
 ### Task 0.5: Instrumentation soak
 

@@ -162,10 +162,7 @@ describe("orchestrate (integration)", () => {
     warn.mockRestore();
   });
 
-  it("middle marker absent on turn 1, present on turn 2 with identical SEMI messages", () => {
-    // Turn 1: no prev state — middle breakpoint must NOT fire.
-    // Placing a middle marker on turn 1 would tell Anthropic to look for a
-    // cache entry that does not exist yet, so the user pays full price.
+  it("writes a middle frontier on the first eligible turn", () => {
     const input: OrchestratorInput = {
       workspace_id: "ws-two-turn",
       session_id: "s-1",
@@ -176,24 +173,16 @@ describe("orchestrate (integration)", () => {
     const tracker = new CacheStateTracker();
 
     const turn1 = orchestrate(input, tracker);
-    expect(turn1.request.messages[1]?.content.at(-1)?.cache_control).toBeUndefined();
-    expect(turn1.signals).not.toContain("middle_cached");
-
-    // Turn 2: same request, same middle — middle breakpoint MUST fire now.
-    const turn2 = orchestrate({ ...input, current_turn: 2 }, tracker);
-    expect(turn2.request.messages[1]?.content.at(-1)?.cache_control).toEqual({
+    expect(turn1.request.messages[1]?.content.at(-1)?.cache_control).toEqual({
       type: "ephemeral",
       ttl: "5m",
     });
-    expect(turn2.signals).toContain("middle_cached");
+    expect(turn1.signals).toContain("middle_marker_emitted");
+    expect(turn1.middle_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("middle marker absent on turn 2 when SEMI content changes between turns", () => {
-    // If the middle region changes, the cached prefix no longer matches —
-    // promoting the middle breakpoint would point to a boundary Anthropic
-    // won't honour, charging the user full price.
+  it("advances the write frontier hash when completed history changes", () => {
     const tracker = new CacheStateTracker();
-
     const turn1Input: OrchestratorInput = {
       workspace_id: "ws-changed-middle",
       session_id: "s-1",
@@ -201,21 +190,25 @@ describe("orchestrate (integration)", () => {
       message_classifications: [cl("SEMI"), cl("SEMI"), cl("VOLATILE")],
       original_request: baseRequest,
     };
-    orchestrate(turn1Input, tracker);
+    const turn1 = orchestrate(turn1Input, tracker);
 
     const differentMiddleRequest: AnthropicMessagesRequest = {
       ...baseRequest,
       messages: [
-        { role: "user",      content: [{ type: "text", text: "different" }] },
-        { role: "assistant", content: [{ type: "text", text: "response"  }] },
-        { role: "user",      content: [{ type: "text", text: "new"       }] },
+        { role: "user", content: [{ type: "text", text: "different" }] },
+        { role: "assistant", content: [{ type: "text", text: "response" }] },
+        { role: "user", content: [{ type: "text", text: "new" }] },
       ],
     };
     const turn2 = orchestrate(
       { ...turn1Input, current_turn: 2, original_request: differentMiddleRequest },
       tracker,
     );
-    expect(turn2.request.messages[1]?.content.at(-1)?.cache_control).toBeUndefined();
+    expect(turn2.request.messages[1]?.content.at(-1)?.cache_control).toEqual({
+      type: "ephemeral",
+      ttl: "5m",
+    });
+    expect(turn2.middle_hash).not.toBe(turn1.middle_hash);
   });
 
   it("does not mutate the original request object", () => {
