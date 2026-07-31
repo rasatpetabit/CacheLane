@@ -33,7 +33,8 @@ export function runVerify(): VerifyReport {
   try {
     // 1) mutate: a request with a system prompt + tools should place breakpoints.
     const result = handlePreRequest({
-      db, tracker, workspace_id: WS, session_id: SESSION, current_turn: 1,
+      db,
+      route: "other", tracker, workspace_id: WS, session_id: SESSION, current_turn: 1,
       original_request: syntheticRequest(),
       message_classifications: [userClassification()],
       block_placements: [],
@@ -57,7 +58,8 @@ export function runVerify(): VerifyReport {
       messages: [{ role: "user", content: [{ type: "text", text: "next" }] }],
     };
     const stubResult = handlePreRequest({
-      db, tracker, workspace_id: WS, session_id: SESSION, current_turn: 5,
+      db,
+      route: "other", tracker, workspace_id: WS, session_id: SESSION, current_turn: 5,
       original_request: stubRequest,
       message_classifications: [userClassification()],
       block_placements: [{
@@ -80,7 +82,8 @@ export function runVerify(): VerifyReport {
 
     // 4) fail-open: a classification/message length mismatch must return unmutated.
     const failOpen = handlePreRequest({
-      db, tracker, workspace_id: WS, session_id: SESSION, current_turn: 7,
+      db,
+      route: "other", tracker, workspace_id: WS, session_id: SESSION, current_turn: 7,
       original_request: syntheticRequest(),
       message_classifications: [], // length mismatch => fail open
       block_placements: [],

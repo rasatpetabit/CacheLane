@@ -94,6 +94,7 @@ describe("handlePreRequest", () => {
 
     const result = handlePreRequest({
       db,
+      route: "other",
       tracker,
       workspace_id: "ws-1",
       session_id: "sess-1",
@@ -123,6 +124,7 @@ describe("handlePreRequest", () => {
 
     handlePreRequest({
       db,
+      route: "other",
       tracker: new CacheStateTracker(),
       workspace_id: "ws-1",
       session_id: "sess-1",
@@ -165,6 +167,7 @@ describe("handlePreRequest", () => {
 
     const result = handlePreRequest({
       db,
+      route: "other",
       tracker: new CacheStateTracker(),
       workspace_id: "ws-1",
       session_id: "sess-1",
@@ -189,6 +192,7 @@ describe("handlePreRequest", () => {
 
     const result = handlePreRequest({
       db,
+      route: "other",
       tracker: new CacheStateTracker(),
       workspace_id: "ws-1",
       session_id: "sess-1",
@@ -217,6 +221,7 @@ describe("handlePreRequest", () => {
 
     const result = handlePreRequest({
       db,
+      route: "other",
       tracker: new CacheStateTracker(),
       workspace_id: "ws-1",
       session_id: "sess-1",
@@ -238,6 +243,7 @@ describe("handlePreRequest", () => {
 
     const result = handlePreRequest({
       db,
+      route: "other",
       tracker: new CacheStateTracker(),
       workspace_id: "ws-1",
       session_id: "sess-1",
@@ -269,6 +275,7 @@ describe("handlePreRequest", () => {
 
     const result = handlePreRequest({
       db: failingDb,
+      route: "other",
       tracker: new CacheStateTracker(),
       workspace_id: "ws-1",
       session_id: "sess-1",

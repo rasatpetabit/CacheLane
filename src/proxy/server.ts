@@ -67,7 +67,7 @@ export function resolveBuildSha(
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
   } catch {
-    return "unknown";
+    throw new Error("CacheLane build SHA unavailable from env, installed GIT_SHA, and git checkout");
   }
 }
 
