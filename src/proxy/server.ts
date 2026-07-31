@@ -51,6 +51,74 @@ const DEFAULT_UPSTREAM_HOST = "api.anthropic.com";
 const DEFAULT_UPSTREAM_PORT = 443;
 const DEFAULT_PORT = 7332;
 
+/**
+ * Connection and request bounds. The proxy previously had none of these — no
+ * upstream timeout, no inbound socket timeout, no concurrency cap — so a
+ * backend that accepted a request and went silent hung the client forever with
+ * no error and nothing to retry.
+ */
+
+/**
+ * Node's default keep-alive timeout is 5 s, which this proxy inherited while
+ * sitting in front of origins that hold idle connections far longer (LiteLLM
+ * and api.anthropic.com were both still open at 75 s when probed; CacheLane
+ * sent FIN at 6.0 s). Clients pool sockets across turns, so every inter-turn
+ * gap past the timeout loses the connection.
+ *
+ * 120 s covers the measured p99 of real client idle gaps (113.5 s, from 332
+ * completion-to-next-request intervals on the live Claude lane). The
+ * distribution is strongly bimodal — p50 240 ms, p95 19.3 s — so this is
+ * sized by the tail, not the median. ~0.9% of gaps still exceed it and fall
+ * back to a fresh connection, which is correct: the alternative is holding
+ * sockets open indefinitely.
+ */
+const KEEP_ALIVE_TIMEOUT_MS = 120_000;
+
+/**
+ * Must exceed KEEP_ALIVE_TIMEOUT_MS. Node races these two against each other:
+ * if headers may arrive up to the keep-alive deadline but the headers timer
+ * expires first, a client writing at the boundary is reset rather than served.
+ */
+const HEADERS_TIMEOUT_MS = KEEP_ALIVE_TIMEOUT_MS + 5_000;
+
+/**
+ * Whole-request ceiling for the *inbound* side, covering multi-MB conversation
+ * uploads on a slow link. This bounds how long a client may take to deliver its
+ * request, not how long the model may take to answer.
+ */
+const REQUEST_TIMEOUT_MS = 300_000;
+
+/**
+ * Upstream socket *inactivity* timeout — deliberately not a total-duration
+ * limit. Legitimate agentic streams run for minutes, and observed upstream p50
+ * latency reached 180 s in some windows with a maximum recorded turn of 129.8 s,
+ * so a total cap would sever valid work. What is never legitimate is an upstream
+ * that goes completely silent. Set well above the longest observed legitimate
+ * gap so it only fires on a genuinely dead backend.
+ */
+const UPSTREAM_IDLE_TIMEOUT_MS = 300_000;
+
+/**
+ * Bound on concurrent in-flight requests. Admission was previously unbounded, so
+ * a burst became an OOM rather than backpressure.
+ *
+ * Sizing, stated honestly. A large request can simultaneously hold its chunk
+ * array, the concatenated buffer, the parsed graph, a full deep clone, the
+ * re-serialised forward body and the entire retained response — of order 30 MB
+ * at the top end, against a 512 MB cgroup limit. Observed steady-state RSS peaks
+ * at 128-134 MB, leaving roughly 350 MB of headroom, so the worst case supports
+ * about a dozen concurrent large requests. 16 is chosen just above that: high
+ * enough never to shed real traffic (production bursts reached 6 arrivals in 2 s
+ * and the cgroup limit was never approached — memory.events max 0, oom 0), low
+ * enough that a pathological burst cannot run away.
+ *
+ * This is a coarse admission bound, not a hard memory guarantee: 16 x 30 MB is
+ * 480 MB, which only fits because requests that large do not arrive together. A
+ * real bound requires not retaining whole responses in memory for post-hoc usage
+ * parsing (spec R-10), which is separate work.
+ */
+const MAX_INFLIGHT_REQUESTS = 16;
+
 export function resolveBuildSha(
   envSha = process.env.CACHELANE_BUILD_SHA,
   installedShaPath = path.join(process.cwd(), "GIT_SHA"),
@@ -368,6 +436,7 @@ function forwardUpstream(
   headers: Record<string, string>,
   body: Buffer,
   res: http.ServerResponse,
+  idleTimeoutMs: number,
 ): void {
   const onError = (err: Error): void => {
     // Avoid crashing the proxy process if upstream connection fails
@@ -391,6 +460,20 @@ function forwardUpstream(
         upstreamRes.pipe(res);
       },
     );
+    // Same inactivity bound as the recorded path: an unadapted route must not be
+    // the one place a silent upstream can still hang a client indefinitely.
+    upstreamReq.setTimeout(idleTimeoutMs, () => {
+      logger.error("upstream idle timeout", JSON.stringify({ path, method }));
+      if (!res.headersSent) {
+        res.writeHead(504, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ error: { type: "upstream_timeout", message: "upstream went silent" } }),
+        );
+      } else {
+        res.destroy();
+      }
+      upstreamReq.destroy();
+    });
     upstreamReq.on("error", onError);
     upstreamReq.write(body);
     upstreamReq.end();
@@ -446,6 +529,13 @@ export interface ProxyOptions {
   session_id?: string;
   /** Override the upstream target (default: https://api.anthropic.com:443). Used by tests. */
   upstream?: Partial<UpstreamTarget>;
+  /**
+   * Upstream socket inactivity timeout, in ms. Defaults to
+   * UPSTREAM_IDLE_TIMEOUT_MS. Exposed so tests can assert the 504 path without
+   * waiting five minutes, and so an operator can tune it for an unusually slow
+   * backend without a rebuild.
+   */
+  upstream_idle_timeout_ms?: number;
 }
 
 /**
@@ -494,6 +584,10 @@ export function createProxyServer(
   // healthcheck failure counter armed to fire the moment the last client quit.
   let inflight = 0;
 
+  // Overridable so tests can exercise the 504 path without waiting five minutes,
+  // and so an unusually slow backend can be accommodated without a rebuild.
+  const idleTimeoutMs = opts.upstream_idle_timeout_ms ?? UPSTREAM_IDLE_TIMEOUT_MS;
+
   /**
    * Sockets currently carrying a response. `clientError` can fire on a socket
    * whose *previous*, perfectly valid pipelined request is still being answered
@@ -537,6 +631,27 @@ export function createProxyServer(
 
     const pathForInflight = (req.url ?? "/").split("?")[0];
     const countsAsWork = !(req.method === "GET" && pathForInflight === "/healthz");
+
+    // Shed load rather than accept work that cannot be held in memory. /healthz
+    // is exempt: liveness must keep answering precisely when the proxy is
+    // saturated, which is when the operator most needs to see it.
+    if (countsAsWork && inflight >= MAX_INFLIGHT_REQUESTS) {
+      logger.warn(
+        "rejected: at capacity",
+        JSON.stringify({ inflight, limit: MAX_INFLIGHT_REQUESTS, path: pathForInflight }),
+      );
+      const payload = Buffer.from(
+        JSON.stringify({ error: { type: "overloaded", message: "proxy at capacity" } }),
+      );
+      res.writeHead(503, {
+        "content-type": "application/json",
+        "content-length": String(payload.length),
+        "retry-after": "1",
+      });
+      res.end(payload);
+      return;
+    }
+
     // Correlates the `incoming` line with its terminal span below.
     const requestId = randomUUID();
     if (countsAsWork) {
@@ -621,7 +736,7 @@ export function createProxyServer(
       const adapter = selectAdapter(method, reqPath);
 
       if (!adapter) {
-        forwardUpstream(upstream, method, reqPath, headersFromIncoming(req), body, res);
+        forwardUpstream(upstream, method, reqPath, headersFromIncoming(req), body, res, idleTimeoutMs);
         return;
       }
 
@@ -629,12 +744,12 @@ export function createProxyServer(
       try {
         parsed = JSON.parse(body.toString("utf-8")) as AnthropicMessagesRequest;
       } catch {
-        forwardUpstream(upstream, method, reqPath, headersFromIncoming(req), body, res);
+        forwardUpstream(upstream, method, reqPath, headersFromIncoming(req), body, res, idleTimeoutMs);
         return;
       }
 
       if (!parsed.messages || !Array.isArray(parsed.messages)) {
-        forwardUpstream(upstream, method, reqPath, headersFromIncoming(req), body, res);
+        forwardUpstream(upstream, method, reqPath, headersFromIncoming(req), body, res, idleTimeoutMs);
         return;
       }
 
@@ -830,6 +945,7 @@ export function createProxyServer(
           finalHeaders["content-length"] = String(forwardBody.length);
 
           proxyAndRecord(upstream, method, reqPath, finalHeaders, forwardBody, res, {
+            idleTimeoutMs,
             db,
             adapter,
             workspaceId,
@@ -946,6 +1062,7 @@ export function createProxyServer(
         }
 
         proxyAndRecord(finalUpstream, method, reqPath, finalHeaders, forwardBody, res, {
+            idleTimeoutMs,
           db,
           adapter,
           workspaceId,
@@ -1001,6 +1118,7 @@ export function createProxyServer(
           }
         }
         proxyAndRecord(fallbackUpstream, method, reqPath, fallbackHeaders, body, res, {
+            idleTimeoutMs,
           db,
           adapter,
           workspaceId,
@@ -1071,6 +1189,15 @@ export function createProxyServer(
     forceClose.unref();
     socket.once("close", () => clearTimeout(forceClose));
   });
+
+  // Inbound connection bounds, set where the server is CREATED rather than where
+  // startProxy happens to listen. createProxyServer is exported and
+  // lifecycle.tryBindProxy calls listen() itself, so assigning these at the
+  // listen site would leave that path on Node's defaults — including the 5 s
+  // keep-alive timeout these exist to correct.
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
 
   return server;
 }
@@ -1151,6 +1278,8 @@ interface RecordOptions {
   requestMutated?: number;
   signals?: string[] | null;
   keepalivePings?: number;
+  /** Upstream socket inactivity timeout in ms. See UPSTREAM_IDLE_TIMEOUT_MS. */
+  idleTimeoutMs?: number;
 }
 
 function proxyAndRecord(
@@ -1213,6 +1342,30 @@ function proxyAndRecord(
       upstreamReq.destroy();
       finish("error");
     }
+  });
+
+  // Socket *inactivity*, not total duration: a long-running stream that keeps
+  // delivering chunks resets this timer, while an upstream that accepts the
+  // request and goes silent no longer hangs the client forever with no error.
+  const idleMs = recordOpts.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS;
+  upstreamReq.setTimeout(idleMs, () => {
+    logger.error(
+      "upstream idle timeout",
+      JSON.stringify({ idle_ms: idleMs, headers_sent: res.headersSent }),
+    );
+    if (!res.headersSent) {
+      res.writeHead(504, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({ error: { type: "upstream_timeout", message: "upstream went silent" } }),
+      );
+    } else {
+      // Mid-stream: the client has already been told this succeeded, so the only
+      // honest signal left is to break the stream. Logged above so a truncation
+      // is attributable rather than looking like a hang.
+      res.destroy();
+    }
+    // Destroy triggers the "error" handler below, which calls finish().
+    upstreamReq.destroy();
   });
 
   upstreamReq.on("error", (err) => {
