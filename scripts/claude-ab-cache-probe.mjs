@@ -14,6 +14,7 @@ const out = arg("--out", join(homedir(), ".cachelane-ops", `claude-ab-${Date.now
 const token = JSON.parse(readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8"))?.claudeAiOauth?.accessToken;
 if (typeof token !== "string" || token.length < 10) throw new Error("Claude OAuth token unavailable");
 const requestDelayMs = Number(arg("--delay-ms", "1500"));
+const maxRateLimitRetries = Number(arg("--rate-limit-retries", "2"));
 const marker = { type: "ephemeral", ttl: "5m" };
 const content = (text, cached = false) => ({ type: "text", text, ...(cached ? { cache_control: marker } : {}) });
 
@@ -24,13 +25,21 @@ function topology(body) {
   return rows;
 }
 async function call(body) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20", authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
-  });
-  const json = await res.json();
-  return { status: res.status, usage: json.usage ?? null, error: res.ok ? null : json.error?.type ?? "unknown" };
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    const result = { status: res.status, usage: json.usage ?? null, error: res.ok ? null : json.error?.type ?? "unknown" };
+    if (res.status !== 429) return result;
+    if (attempt >= maxRateLimitRetries) throw new Error(`Anthropic rate limit persisted after ${attempt + 1} attempts; aborting experiment`);
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 30_000 * (attempt + 1);
+    console.error(`rate limited; backing off ${backoffMs}ms before retry ${attempt + 1}/${maxRateLimitRetries}`);
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
+  }
 }
 
 function applyArm(arm, stable, completedHistory, currentTurn, previous) {
@@ -121,7 +130,10 @@ const gates = {
       return value > staticCreation;
     },
   ).length >= 2,
-  distinct_arm_topologies: JSON.stringify(summary.passthrough.topologies) !== JSON.stringify(summary.prefix_only.topologies) && JSON.stringify(summary.candidate.topologies) !== JSON.stringify(summary.prefix_only.topologies),
+  distinct_arm_topologies:
+    JSON.stringify(summary.passthrough.topologies) !== JSON.stringify(summary.prefix_only.topologies) &&
+    JSON.stringify(summary.candidate.topologies) !== JSON.stringify(summary.prefix_only.topologies) &&
+    JSON.stringify(summary.candidate.topologies) !== JSON.stringify(summary.passthrough.topologies),
 };
 const report = { ts: new Date().toISOString(), model, sessions, turns, summary, gates, runs };
 mkdirSync(dirname(out), { recursive: true });

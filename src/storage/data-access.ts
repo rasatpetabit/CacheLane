@@ -938,6 +938,10 @@ export function openDatabase(dbPath: string): CachelaneDb {
         COALESCE(SUM(CASE WHEN NOT EXISTS (
           SELECT 1 FROM json_each(signals) s WHERE s.value IN ('usage:recorded', 'usage:missing')
         ) THEN 1 ELSE 0 END), 0) AS usage_unknown,
+        COALESCE(SUM(CASE WHEN json_extract((SELECT provenance_json FROM turn_explanations e WHERE e.turn_id = turns.id LIMIT 1), '$.marker_owner') = 'client' THEN 1 ELSE 0 END), 0) AS marker_client,
+        COALESCE(SUM(CASE WHEN json_extract((SELECT provenance_json FROM turn_explanations e WHERE e.turn_id = turns.id LIMIT 1), '$.marker_owner') = 'cachelane' THEN 1 ELSE 0 END), 0) AS marker_cachelane,
+        COALESCE(SUM(CASE WHEN json_extract((SELECT provenance_json FROM turn_explanations e WHERE e.turn_id = turns.id LIMIT 1), '$.marker_owner') = 'mixed' THEN 1 ELSE 0 END), 0) AS marker_mixed,
+        COALESCE(SUM(CASE WHEN COALESCE(json_extract((SELECT provenance_json FROM turn_explanations e WHERE e.turn_id = turns.id LIMIT 1), '$.marker_owner'), 'unknown') NOT IN ('client', 'cachelane', 'mixed') THEN 1 ELSE 0 END), 0) AS marker_unknown,
         COALESCE(SUM(CASE
           WHEN provider = 'openai-chat' THEN input_tokens
           ELSE input_tokens + cache_read_tokens + cache_creation_5m_tokens + cache_creation_1h_tokens
@@ -951,6 +955,10 @@ export function openDatabase(dbPath: string): CachelaneDb {
       usage_recorded: number;
       usage_missing: number;
       usage_unknown: number;
+      marker_client: number;
+      marker_cachelane: number;
+      marker_mixed: number;
+      marker_unknown: number;
       logical_input: number;
       provider_native_cost: number;
     };
@@ -985,6 +993,12 @@ export function openDatabase(dbPath: string): CachelaneDb {
         recorded: dimensions.usage_recorded,
         missing: dimensions.usage_missing,
         unknown: dimensions.usage_unknown,
+      },
+      marker_owner_counts: {
+        client: dimensions.marker_client,
+        cachelane: dimensions.marker_cachelane,
+        mixed: dimensions.marker_mixed,
+        unknown: dimensions.marker_unknown,
       },
       usage_missing_rate: row.turns === 0 ? 0 : dimensions.usage_missing / row.turns,
       logical_input_tokens: dimensions.logical_input,

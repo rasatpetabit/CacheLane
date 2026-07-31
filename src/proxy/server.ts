@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import tls from "node:tls";
 import { randomUUID, createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { loadConfig, defaultWorkspaceId } from "../config/index.js";
 import { openDatabase, calculateEffectiveCostUnits, type CachelaneDb } from "../storage/index.js";
 import { handlePreRequest } from "../hooks/pre-request.js";
@@ -444,6 +445,27 @@ export function createProxyServer(
   } catch {
     config = null;
   }
+  const stableJson = (value: unknown): string => {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+  };
+  const configHash = config
+    ? createHash("sha256").update(stableJson(config)).digest("hex")
+    : undefined;
+  let buildSha = process.env.CACHELANE_BUILD_SHA;
+  if (!buildSha) {
+    try {
+      buildSha = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      buildSha = "unknown";
+    }
+  }
   const upstream: UpstreamTarget = {
     host: opts.upstream?.host ?? config?.proxy.upstream_host ?? DEFAULT_UPSTREAM_HOST,
     port: opts.upstream?.port ?? config?.proxy.upstream_port ?? DEFAULT_UPSTREAM_PORT,
@@ -760,6 +782,9 @@ export function createProxyServer(
           ),
           pruner: config.pruner,
           marker_strategy: config.features.marker_strategy,
+          route: "proxy",
+          build_sha: buildSha,
+          config_hash: configHash,
         });
 
         const actuallyMutate = config.features.mutation_enabled && (compressionMutated || result.mutated);

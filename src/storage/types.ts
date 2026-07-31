@@ -281,6 +281,7 @@ export interface TurnMeasurementProvenance {
   config_hash: string | null;
   experiment_arm: "passthrough" | "prefix_only" | "candidate" | "prod";
   route: "proxy" | "hook" | "other";
+  marker_owner?: "client" | "cachelane" | "mixed";
   outcome: "ok" | "fallback" | "error";
   usage_missing: boolean;
   incoming_markers: MarkerProvenance[];
@@ -381,6 +382,13 @@ export interface UsageCounts {
   unknown: number;
 }
 
+export interface MarkerOwnerCounts {
+  client: number;
+  cachelane: number;
+  mixed: number;
+  unknown: number;
+}
+
 export interface GetStatsParams {
   scope: StatsScope;
   workspace_id?: string;
@@ -449,6 +457,8 @@ export interface CachelaneStats {
   route_counts: RouteCounts;
   /** Explicit provider-usage provenance. Unknown historical rows are not treated as missing. */
   usage_counts: UsageCounts;
+  /** Ownership of the final provider-visible marker topology. */
+  marker_owner_counts?: MarkerOwnerCounts;
   /** Fraction of all turns carrying the forward signal `usage:missing`. */
   usage_missing_rate: number;
   /** Provider-normalized logical input tokens (OpenAI prompt_tokens; Anthropic sum of components). */

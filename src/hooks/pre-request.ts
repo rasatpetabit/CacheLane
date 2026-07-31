@@ -32,6 +32,9 @@ export interface PreRequestInput {
   block_placements: PromptBlockPlacement[];
   pruner: CachelaneConfig["pruner"];
   marker_strategy?: CachelaneConfig["features"]["marker_strategy"];
+  route?: "proxy" | "hook" | "other";
+  build_sha?: string;
+  config_hash?: string;
   now_ms?: number;
 }
 
@@ -130,6 +133,14 @@ function explainRegionMetadata(
   };
 }
 
+function markerOwner(result: PreRequestResult): "client" | "cachelane" | "mixed" {
+  const incoming = (result.incoming_markers?.length ?? 0) > 0;
+  const emitted = (result.emitted_markers?.length ?? 0) > 0;
+  if (incoming && emitted) return "mixed";
+  if (emitted) return "cachelane";
+  return "client";
+}
+
 function recordExplanation(
   input: PreRequestInput,
   result: PreRequestResult,
@@ -162,10 +173,11 @@ function recordExplanation(
         result.effective_message_classifications,
       ),
       provenance: {
-        build_sha: process.env.CACHELANE_BUILD_SHA ?? null,
-        config_hash: process.env.CACHELANE_CONFIG_HASH ?? null,
+        build_sha: input.build_sha ?? process.env.CACHELANE_BUILD_SHA ?? null,
+        config_hash: input.config_hash ?? process.env.CACHELANE_CONFIG_HASH ?? null,
         experiment_arm: input.marker_strategy ?? "prod",
-        route: "proxy",
+        route: input.route ?? "other",
+        marker_owner: markerOwner(result),
         outcome: result.signals.includes("error:fallback") ? "fallback" : "ok",
         usage_missing: true,
         incoming_markers: result.incoming_markers ?? [],
