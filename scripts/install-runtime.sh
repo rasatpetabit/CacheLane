@@ -232,17 +232,22 @@ sudo systemctl enable cachelane-litellm.service cachelane-claude.service cachela
 # No-op on upgrades; ensures both lanes exist before the dual health gate on a first install.
 sudo systemctl start cachelane-litellm.service cachelane-claude.service
 
-echo "Waiting for LiteLLM lane connections to drain"
-wait_for_lane_drain 7332 || exit 1
-echo "Restarting LiteLLM lane"
-sudo systemctl restart cachelane-litellm.service
-sleep 1
-"$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
-
+# Restart the independently idle native-Anthropic lane first. A busy LiteLLM
+# lane must not prevent Claude from receiving the installed build.
 echo "Waiting for Claude lane connections to drain"
 wait_for_lane_drain 7333 || exit 1
 echo "Restarting Claude lane"
 sudo systemctl restart cachelane-claude.service
+sleep 1
+"$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
+
+echo "Waiting for LiteLLM lane connections to drain"
+if ! wait_for_lane_drain 7332; then
+  echo >&2 "Claude lane is already on the installed build; LiteLLM remains on its prior process (split state)."
+  exit 1
+fi
+echo "Restarting LiteLLM lane"
+sudo systemctl restart cachelane-litellm.service
 sleep 1
 "$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
 

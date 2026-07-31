@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildSha } from "../server.js";
 
 describe("resolveBuildSha", () => {
+  it("prefers the environment SHA over installed and git values", () => {
+    expect(resolveBuildSha("environment-sha", "/definitely/missing", "/definitely/missing"))
+      .toBe("environment-sha");
+  });
+
   it("prefers the installed runtime SHA when no environment override exists", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cachelane-sha-"));
     try {
@@ -14,5 +19,10 @@ describe("resolveBuildSha", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("fails closed when environment, installed SHA, and git are unavailable", () => {
+    expect(() => resolveBuildSha(undefined, "/definitely/missing/GIT_SHA", "/definitely/missing"))
+      .toThrow("build SHA unavailable");
   });
 });

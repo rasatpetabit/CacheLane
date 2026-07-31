@@ -264,6 +264,30 @@ describe("handlePreRequest", () => {
     );
   });
 
+  it("records passthrough marker ownership and explicit hook provenance", () => {
+    const result = handlePreRequest({
+      db,
+      route: "hook",
+      marker_strategy: "passthrough",
+      tracker: new CacheStateTracker(),
+      workspace_id: "ws-pass",
+      session_id: "sess-pass",
+      turn_id: "turn-pass",
+      current_turn: 1,
+      original_request: baseRequest(),
+      message_classifications: [cl("SEMI"), cl("VOLATILE")],
+      block_placements: [],
+      pruner: { enabled: false, k: 3, mode: "default" },
+    });
+
+    expect(result.signals).toContain("markers:preserved_client");
+    expect(db.getTurnExplanation({ workspace_id: "ws-pass", session_id: "sess-pass", turn_number: 1 })?.provenance).toMatchObject({
+      route: "hook",
+      experiment_arm: "passthrough",
+      marker_owner: "client",
+    });
+  });
+
   it("fails open with the original request when storage fails", () => {
     const original = baseRequest("do not touch");
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);

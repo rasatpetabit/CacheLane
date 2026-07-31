@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { candidatePrefixState, countTokens, planAndApplyMarkers } from "../dist/index.js";
+import { fetchWithRateLimitRetry } from "./lib/rate-limit-retry.mjs";
 
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? (process.argv[i + 1] ?? fallback) : fallback; };
 const sessions = Number(arg("--sessions", "3"));
@@ -25,21 +26,21 @@ function topology(body) {
   return rows;
 }
 async function call(body) {
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetchWithRateLimitRetry(
+    () => fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20", authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
-    });
-    const json = await res.json();
-    const result = { status: res.status, usage: json.usage ?? null, error: res.ok ? null : json.error?.type ?? "unknown" };
-    if (res.status !== 429) return result;
-    if (attempt >= maxRateLimitRetries) throw new Error(`Anthropic rate limit persisted after ${attempt + 1} attempts; aborting experiment`);
-    const retryAfter = Number(res.headers.get("retry-after"));
-    const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 30_000 * (attempt + 1);
-    console.error(`rate limited; backing off ${backoffMs}ms before retry ${attempt + 1}/${maxRateLimitRetries}`);
-    await new Promise((resolve) => setTimeout(resolve, backoffMs));
-  }
+    }),
+    {
+      maxRetries: maxRateLimitRetries,
+      onRetry: ({ attempt, maxRetries, backoffMs }) => {
+        console.error(`rate limited; backing off ${backoffMs}ms before retry ${attempt}/${maxRetries}`);
+      },
+    },
+  );
+  const json = await res.json();
+  return { status: res.status, usage: json.usage ?? null, error: res.ok ? null : json.error?.type ?? "unknown" };
 }
 
 function applyArm(arm, stable, completedHistory, currentTurn, previous) {
