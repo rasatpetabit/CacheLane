@@ -35,6 +35,14 @@ describe("install-runtime restart safety", () => {
     expect(liteRestart).toBeGreaterThan(liteWait);
   });
 
+  it("waits for a changed PID and healthy lane after each restart", () => {
+    expect(installer).toContain("wait_for_lane_ready()");
+    expect(installer).toContain('CACHELANE_READY_TIMEOUT_SEC:-30');
+    expect(installer).toContain('"$new_pid" != "$old_pid"');
+    expect(installer).toContain('"status":"ok"');
+    expect(installer).not.toContain("sleep 1\n\"$NODE_BIN\" \"$INSTALL/scripts/health-dual.mjs\"");
+  });
+
   it("fails deployment on drain timeout instead of forcing restart", () => {
     expect(installer).toContain("timed out waiting for active connections to drain");
     expect(installer).toContain("wait_for_lane_drain 7333 || exit 1");

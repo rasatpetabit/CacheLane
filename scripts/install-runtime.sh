@@ -13,6 +13,7 @@ RUNTIME_NODE_DIR="$(dirname "$NODE_BIN")"
 STAGE=""
 BACKUP=""
 DRAIN_TIMEOUT_SEC="${CACHELANE_DRAIN_TIMEOUT_SEC:-300}"
+READY_TIMEOUT_SEC="${CACHELANE_READY_TIMEOUT_SEC:-30}"
 
 cleanup_stage() {
   if [[ -n "$STAGE" && -d "$STAGE" ]]; then
@@ -58,6 +59,21 @@ wait_for_lane_drain() {
     sleep 1
   done
   echo "error: timed out waiting for active connections to drain on port $port; refusing restart" >&2
+  return 1
+}
+
+wait_for_lane_ready() {
+  local service="$1" port="$2" old_pid="$3" deadline new_pid body
+  deadline=$((SECONDS + READY_TIMEOUT_SEC))
+  while (( SECONDS <= deadline )); do
+    new_pid="$(systemctl show -p MainPID --value "$service")"
+    body="$(curl -fsS --max-time 2 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
+    if [[ "$new_pid" != "0" && "$new_pid" != "$old_pid" && "$body" == *'"status":"ok"'* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "error: $service did not return healthy with a changed PID after restart" >&2
   return 1
 }
 
@@ -237,9 +253,9 @@ sudo systemctl start cachelane-litellm.service cachelane-claude.service
 echo "Waiting for Claude lane connections to drain"
 wait_for_lane_drain 7333 || exit 1
 echo "Restarting Claude lane"
+old_claude_pid="$(systemctl show -p MainPID --value cachelane-claude.service)"
 sudo systemctl restart cachelane-claude.service
-sleep 1
-"$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
+wait_for_lane_ready cachelane-claude.service 7333 "$old_claude_pid"
 
 echo "Waiting for LiteLLM lane connections to drain"
 if ! wait_for_lane_drain 7332; then
@@ -247,8 +263,10 @@ if ! wait_for_lane_drain 7332; then
   exit 1
 fi
 echo "Restarting LiteLLM lane"
+old_litellm_pid="$(systemctl show -p MainPID --value cachelane-litellm.service)"
 sudo systemctl restart cachelane-litellm.service
-sleep 1
+wait_for_lane_ready cachelane-litellm.service 7332 "$old_litellm_pid"
+
 "$NODE_BIN" "$INSTALL/scripts/health-dual.mjs"
 
 sudo systemctl start cachelane-healthcheck.timer
