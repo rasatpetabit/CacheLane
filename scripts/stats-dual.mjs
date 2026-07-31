@@ -74,23 +74,10 @@ function humanizeText(text) {
     .join("\n");
 }
 
-function runStatsJson(home) {
-  try {
-    const raw = run(home, ["stats", "--scope", "all", "--json"]);
-    const first = raw.indexOf("{");
-    return first < 0 ? null : JSON.parse(raw.slice(first));
-  } catch {
-    return null;
-  }
-}
-
 for (const h of homes) {
   console.log(`\n======== ${h.name}  CACHELANE_HOME=${h.home} ========`);
   const statsText = humanizeText(run(h.home, ["stats", "--scope", "all"]).trim());
   console.log(statsText);
-  // Keep a tolerant JSON read as a forward-compatibility check. Human stats
-  // already prints these dimensions, so do not duplicate them here.
-  runStatsJson(h.home);
   console.log("--- sessions (top) ---");
   const sessions = run(h.home, ["sessions"]).trim().split("\n").slice(0, 12).join("\n");
   console.log(humanizeText(sessions));

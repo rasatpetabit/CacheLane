@@ -211,6 +211,49 @@ describe("orchestrate (integration)", () => {
     expect(turn2.middle_hash).not.toBe(turn1.middle_hash);
   });
 
+  it("preserves client markers and tracker state in passthrough mode", () => {
+    const request: AnthropicMessagesRequest = {
+      ...baseRequest,
+      system: [{
+        type: "text",
+        text: "You are Claude.",
+        cache_control: { type: "ephemeral", ttl: "5m" },
+      }],
+    };
+    const tracker = new CacheStateTracker();
+    const out = orchestrate({
+      workspace_id: "ws-passthrough",
+      session_id: "s-1",
+      current_turn: 1,
+      message_classifications: [cl("SEMI"), cl("SEMI"), cl("VOLATILE")],
+      original_request: request,
+    }, tracker, undefined, "passthrough");
+
+    expect(out.request).toBe(request);
+    expect(out.request.system?.[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "5m" });
+    expect(out.mutated).toBe(false);
+    expect(out.signals).toEqual(["markers:preserved_client"]);
+    expect(tracker.get("ws-passthrough", "s-1")).toBeUndefined();
+  });
+
+  it("keeps prefix-only behavior available behind the explicit strategy", () => {
+    const tracker = new CacheStateTracker();
+    const out = orchestrate({
+      workspace_id: "ws-prefix-only",
+      session_id: "s-1",
+      current_turn: 1,
+      message_classifications: [cl("SEMI"), cl("SEMI"), cl("VOLATILE")],
+      original_request: baseRequest,
+    }, tracker, undefined, "prefix_only");
+
+    expect(out.request.system?.at(-1)?.cache_control).toEqual({ type: "ephemeral", ttl: "5m" });
+    expect(out.request.messages.flatMap((message) => message.content).some(
+      (block) => block.cache_control !== undefined,
+    )).toBe(false);
+    expect(out.signals).toEqual(["prefix_cached", "prefix_marker_emitted"]);
+    expect(out.middle_hash).toBeNull();
+  });
+
   it("does not mutate the original request object", () => {
     // If the original is silently modified, the fail-open path would return
     // a request that already has stale cache markers on it.

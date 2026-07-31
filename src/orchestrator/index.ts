@@ -1,5 +1,10 @@
 import type { CacheTier, CachelaneConfig } from "../types/index.js";
-import type { MutatedRequest, OrchestratorInput } from "./types.js";
+import type {
+  AnthropicMessagesRequest,
+  MarkerTopologyEntry,
+  MutatedRequest,
+  OrchestratorInput,
+} from "./types.js";
 import { DEFAULT_CONFIG } from "../config/defaults.js";
 import { countTokens } from "../tokenizer/index.js";
 import { CacheStateTracker } from "./cache-state-tracker.js";
@@ -29,6 +34,26 @@ const TTL_MS: Record<CacheTier, number> = {
   "1h": 60 * 60 * 1000,
 };
 
+function markerTopology(request: AnthropicMessagesRequest): MarkerTopologyEntry[] {
+  const topology: MarkerTopologyEntry[] = [];
+  for (const [index, tool] of (request.tools ?? []).entries()) {
+    if (tool.cache_control) topology.push({ location: "tool", index: String(index), ttl: tool.cache_control.ttl });
+  }
+  for (const [index, block] of (request.system ?? []).entries()) {
+    if (block.cache_control) topology.push({ location: "system", index: String(index), ttl: block.cache_control.ttl });
+  }
+  for (const [messageIndex, message] of request.messages.entries()) {
+    for (const [contentIndex, block] of message.content.entries()) {
+      if (block.cache_control) topology.push({
+        location: "message",
+        index: `${messageIndex}:${contentIndex}`,
+        ttl: block.cache_control.ttl,
+      });
+    }
+  }
+  return topology;
+}
+
 function prefixTokenCount(input: OrchestratorInput): number {
   try {
     const prefixText = JSON.stringify({
@@ -55,6 +80,7 @@ export function orchestrate(
   input: OrchestratorInput,
   tracker: CacheStateTracker,
   keepaliveConfig: CachelaneConfig["keepalive"] = DEFAULT_CONFIG.keepalive,
+  markerStrategy: CachelaneConfig["features"]["marker_strategy"] = "candidate",
 ): MutatedRequest {
   try {
     const boundaries = findRegionBoundaries(input.message_classifications);
@@ -68,18 +94,28 @@ export function orchestrate(
     );
     const tokenCount = prefixTokenCount(input);
     const ttlClass = ttlForPrefix(tokenCount, keepaliveConfig);
-    const markerPlan = planMarkers(input.original_request, ttlClass, prevState);
-    const mutated = mutateRequest(
-      input.original_request,
-      boundaries,
-      breakpoints,
-      ttlClass,
-      markerPlan,
-    );
+    const markerPlan = markerStrategy === "candidate"
+      ? planMarkers(input.original_request, ttlClass, prevState)
+      : undefined;
+    const mutated = markerStrategy === "passthrough"
+      ? input.original_request
+      : mutateRequest(
+          input.original_request,
+          boundaries,
+          breakpoints,
+          ttlClass,
+          markerPlan,
+        );
 
     const now = Date.now();
-    const writeFrontier = markerPlan.markers.find((marker) => marker.role === "write_frontier");
-    if (markerPlan.strategy !== "fail_preserve_client" && markerPlan.markers.length > 0) {
+    const writeFrontier = markerPlan?.markers.find((marker) => marker.role === "write_frontier");
+    const didMutate = markerStrategy === "candidate"
+      ? markerPlan?.strategy !== "fail_preserve_client" && (markerPlan?.markers.length ?? 0) > 0
+      : markerStrategy === "prefix_only" && (
+          mutated.system?.some((block) => block.cache_control !== undefined) === true ||
+          mutated.tools?.some((tool) => tool.cache_control !== undefined) === true
+        );
+    if (didMutate) {
       tracker.update(input.workspace_id, input.session_id, {
         workspace_id: input.workspace_id,
         prefix_hash: breakpoints.prefix_hash,
@@ -95,10 +131,11 @@ export function orchestrate(
       });
     }
 
-    const didMutate = markerPlan.strategy !== "fail_preserve_client" &&
-      markerPlan.markers.length > 0;
-
-    const signals: MutatedRequest["signals"] = markerPlan.signals;
+    const signals: MutatedRequest["signals"] = markerStrategy === "passthrough"
+      ? ["markers:preserved_client"]
+      : markerStrategy === "prefix_only"
+        ? didMutate ? ["prefix_cached", "prefix_marker_emitted"] : []
+        : markerPlan?.signals ?? [];
 
     console.error("[cachelane] orchestrate", {
       prefix_changed: prevState?.prefix_hash !== breakpoints.prefix_hash,
@@ -111,9 +148,11 @@ export function orchestrate(
       request: mutated,
       mutated: didMutate,
       prefix_hash: breakpoints.prefix_hash,
-      middle_hash:
-        markerPlan.markers.find((marker) => marker.role === "write_frontier")?.cumulative_hash ?? null,
+      middle_hash: writeFrontier?.cumulative_hash ?? null,
       signals,
+      incoming_markers: markerTopology(input.original_request),
+      emitted_markers: markerTopology(mutated),
+      prefix_hashes_at_breakpoints: markerPlan?.markers.map((marker) => marker.cumulative_hash),
       keepalive_pings_since_last_turn: keepalivePings,
     };
   } catch (err) {

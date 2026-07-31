@@ -759,6 +759,7 @@ export function createProxyServer(
             db.getBlocksBySession(workspaceId, sessionId),
           ),
           pruner: config.pruner,
+          marker_strategy: config.features.marker_strategy,
         });
 
         const actuallyMutate = config.features.mutation_enabled && (compressionMutated || result.mutated);
@@ -1058,7 +1059,10 @@ function recordUsageFromResponse(
     const adapter = opts.adapter ?? selectAdapter("POST", "/v1/messages");
     const usage = adapter ? adapter.parseUsage(raw, contentType) : null;
 
-    if (!usage) return;
+    if (!usage) {
+      recordMissingUsage(opts);
+      return;
+    }
 
     const inputTokens = usage.input;
     const outputTokens = usage.output;
@@ -1164,7 +1168,39 @@ function recordUsageFromResponse(
       effective,
     }));
   } catch (err) {
+    recordMissingUsage(opts);
     logger.error("failed to parse upstream response for recording", String(err), err);
+  }
+}
+
+function recordMissingUsage(opts: RecordOptions): void {
+  try {
+    opts.db.insertTurn({
+      id: opts.turnId,
+      workspace_id: opts.workspaceId,
+      session_id: opts.sessionId,
+      turn_number: opts.currentTurn,
+      model: opts.model,
+      provider: opts.adapter?.name ?? "anthropic",
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      effective_cost_units: 0,
+      prefix_breakpoint_hash: opts.prefixHash || null,
+      middle_breakpoint_hash: opts.middleHash,
+      pruned_blocks_count: opts.prunedCount,
+      keepalive_pings_since_last_turn: opts.keepalivePings ?? 0,
+      request_mutated: opts.requestMutated ?? 0,
+      signals: JSON.stringify([...(opts.signals ?? []), "usage:missing"]),
+      created_at: Date.now(),
+    });
+  } catch (insertErr) {
+    if (!(insertErr instanceof Error && insertErr.message.includes("UNIQUE"))) {
+      logger.error("failed to record missing usage", String(insertErr), insertErr);
+    }
   }
 }
 

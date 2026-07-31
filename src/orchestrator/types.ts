@@ -91,12 +91,21 @@ export type Breakpoints = {
   include_middle_breakpoint: boolean;
 };
 
+export type MarkerTopologyEntry = {
+  location: "tool" | "system" | "message";
+  index: string;
+  ttl: CacheTier;
+};
+
 export type MutatedRequest = {
   request: AnthropicMessagesRequest;
   mutated: boolean;
   prefix_hash: string;
   middle_hash: string | null;
   signals: string[];
+  incoming_markers?: MarkerTopologyEntry[];
+  emitted_markers?: MarkerTopologyEntry[];
+  prefix_hashes_at_breakpoints?: string[];
   keepalive_pings_since_last_turn?: number;
 };
 

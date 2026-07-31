@@ -182,6 +182,27 @@ describe("Pipeline smoke test — 1h TTL cost tier (§cost-formula)", () => {
 });
 
 describe("Pipeline smoke test (§7.2.1)", () => {
+  it("records malformed provider usage as missing rather than a zero-valued success", async () => {
+    const req: AnthropicMessagesRequest = {
+      model: "claude-opus-4-7",
+      system: [{ type: "text", text: "system prompt" }],
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      max_tokens: 1,
+    };
+    resetFakeUpstream("data: {not-json}\n");
+    await postMessages(proxyPort, JSON.stringify(req));
+    await waitForTurn(dbPath, "test-session", 1);
+
+    const db = openDatabase(dbPath);
+    try {
+      const stats = db.getStats({ scope: "session", workspace_id: "test-ws", session_id: "test-session" });
+      expect(stats.usage_counts).toEqual({ recorded: 0, missing: 1, unknown: 0 });
+      expect(stats.usage_missing_rate).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("validates the entire pipeline in one shot", async () => {
     const req1: AnthropicMessagesRequest = {
       model: "claude-opus-4-7",

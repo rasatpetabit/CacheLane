@@ -1,5 +1,6 @@
 import type { Classification } from "../classifier/index.js";
 import type { CachelaneConfig } from "../types/index.js";
+import { DEFAULT_CONFIG } from "../config/defaults.js";
 import type {
   CachelaneDb,
   TurnExplanationBlockMetadata,
@@ -30,6 +31,7 @@ export interface PreRequestInput {
   message_classifications: Classification[];
   block_placements: PromptBlockPlacement[];
   pruner: CachelaneConfig["pruner"];
+  marker_strategy?: CachelaneConfig["features"]["marker_strategy"];
   now_ms?: number;
 }
 
@@ -159,6 +161,22 @@ function recordExplanation(
       region_metadata: explainRegionMetadata(
         result.effective_message_classifications,
       ),
+      provenance: {
+        build_sha: process.env.CACHELANE_BUILD_SHA ?? null,
+        config_hash: process.env.CACHELANE_CONFIG_HASH ?? null,
+        experiment_arm: input.marker_strategy ?? "prod",
+        route: "proxy",
+        outcome: result.signals.includes("error:fallback") ? "fallback" : "ok",
+        usage_missing: true,
+        incoming_markers: result.incoming_markers ?? [],
+        emitted_markers: result.emitted_markers ?? [],
+        prefix_hash_at_bp: result.prefix_hashes_at_breakpoints ?? [],
+        prune_transforms: result.prune_decisions.map((decision) => ({
+          block_id: decision.block_id,
+          original_tokens: decision.original_tokens,
+          stub_tokens: decision.stub_tokens,
+        })),
+      },
       signals: result.signals,
       created_at: now,
       updated_at: now,
@@ -244,6 +262,8 @@ export function handlePreRequest(input: PreRequestInput): PreRequestResult {
         original_request: requestWithStubs,
       },
       input.tracker,
+      DEFAULT_CONFIG.keepalive,
+      input.marker_strategy ?? "candidate",
     );
 
     const result = {

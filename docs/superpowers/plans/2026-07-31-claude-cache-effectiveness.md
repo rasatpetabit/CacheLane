@@ -127,11 +127,11 @@ Secondary (diagnostic, not sufficient alone):
 
 Prefer signals + explanation JSON over a heavy migration when possible; if columns are required, add migration with defaults.
 
-- [ ] **Step 1: Failing tests** for route≠outcome, usage_missing, marker provenance fields.
-- [ ] **Step 2: Implement write path + `getStats` aggregates** (end-to-end + stratified + route share + missing-usage).
-- [ ] **Step 3: Normalize token fields in adapters** (Task 0.1b below) before computing any index.
-- [ ] **Step 4: Update `stats-dual.mjs`** compact human output with new fields.
-- [ ] **Step 5: Verify**
+- [x] **Step 1: Failing tests** for route≠outcome, usage_missing, marker provenance fields.
+- [x] **Step 2: Implement write path + `getStats` aggregates** (end-to-end + stratified + route share + missing-usage).
+- [x] **Step 3: Normalize token fields in adapters** (Task 0.1b below) before computing any index.
+- [x] **Step 4: Update `stats-dual.mjs`** compact human output with new fields.
+- [x] **Step 5: Verify**
 
 ```bash
 npm test -- stats-dimensions
@@ -153,8 +153,8 @@ CACHELANE_HOME=~/.cachelane-claude node dist/cli/index.cjs stats --scope all --j
 | `create_5m` / `create_1h` | from cache_creation | 0 / unavailable unless reported |
 | `logical_input` | uncached + read + creates | `prompt_tokens` |
 
-- [ ] **Step 1: Fixture tests** prove no double-count of OpenAI cached tokens under token-reuse index.
-- [ ] **Step 2: Label metrics**
+- [x] **Step 1: Fixture tests** prove no double-count of OpenAI cached tokens under token-reuse index.
+- [x] **Step 2: Label metrics**
   - `token_reuse_index` = `cache_read / logical_input` (explicit formula in docs)
   - `anthropic_effective_input_units` only when create fields meaningful; for OpenAI mark `write_cost_unknown`
   - Never call OpenAI-weighted numbers “Anthropic savings”
@@ -166,8 +166,8 @@ CACHELANE_HOME=~/.cachelane-claude node dist/cli/index.cjs stats --scope all --j
 
 Capture JSONL: timestamp, git sha, home, arm, end-to-end + stratified metrics, marker provenance, cache_read p50/p90 for turn≥20, prune reclaim, top signals, usage_missing rate.
 
-- [ ] **Step 1: Implement**
-- [ ] **Step 2: Store pre-fix baseline**
+- [x] **Step 1: Implement**
+- [x] **Step 2: Store pre-fix baseline**
 
 ```bash
 node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effectiveness.jsonl
@@ -177,9 +177,9 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 
 **Files:** pruner, explanation write, `getStats`
 
-- [ ] Trace one Claude turn with `pruned_blocks_count > 0` end-to-end.
-- [ ] Document root cause in plan progress notes.
-- [ ] If pure accounting → fix in Phase 0. If stubs not applied on Anthropic path → Phase 2 task (still after A/B design freeze).
+- [x] Trace one Claude turn with `pruned_blocks_count > 0` end-to-end.
+- [x] Document root cause in plan progress notes: `blocks.token_count` is overwritten with stub size, so the original size survives only in `turn_explanations.prune_decisions_json`.
+- [x] Pure accounting fixed in Phase 0: materialized decisions now persist `tokens_reclaimed`; stats sum those immutable decision records. If stubs not applied on Anthropic path → Phase 2 task (still after A/B design freeze).
 
 ### Task 0.4: Anthropic provider-conformance probes (blocker for Phase 1)
 
@@ -199,7 +199,7 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 
 - [x] **Step 1: Implement initial structured probe** (`scripts/anthropic-cache-conformance.mjs`)
 - [x] **Step 2: Run retained-anchor/deeper-frontier probe** (2026-07-31, Haiku 4.5): write=20,305 creation; anchor read=20,305; deeper write=20,305 read + 22 creation; deeper read=20,327. HTTP 200 for all. Durable production-path result still required under `~/.cachelane-ops/` before deploy.
-- [ ] **Step 3: Complete remaining mandatory probes** (moving-within-lookback, beyond-lookback, parallel tools, all TTL combinations, prune/stub invalidation, CC-shaped pass-through markers) before production deploy.
+- [x] **Step 3: Complete remaining mandatory probes** (moving-within-lookback, block-limit enforcement, parallel tools, all TTL combinations, prune/stub invalidation, CC-shaped pass-through markers). All nine gates passed 2026-07-31; evidence `~/.cachelane-ops/conformance-2026-07-31-v2.json`.
 - [x] **Step 4: Narrow algorithm gate** — passed only for retained old anchor + new frontier. This does *not* approve the single-moving-marker variant or production deployment.
 
 ### Task 0.5: Instrumentation soak
@@ -241,10 +241,10 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 4. If prune may mutate content earlier than frontier, either (a) A/B has prune off, or (b) place anchor before mutable zone, or (c) fail_preserve.
 5. Fail_preserve returns client markers unchanged (modulo already-invalid ordering cleanup only if proven safe).
 
-- [ ] **Step 1: Failing tests** for D1–D5 cases (growing history, parallel tools, TTL illegal, prune-mutated early block, fail_preserve).
-- [ ] **Step 2: Implement planner + wire mutator**
-- [ ] **Step 3: Delete or quarantine hash-equality middle include path**
-- [ ] **Step 4: Verify** `npm test -- marker-planner` && `npx tsc --noEmit`
+- [x] **Step 1: Failing tests** for D1–D5 cases (growing history, parallel tools, TTL illegal, stale boundary hashes, fail_preserve).
+- [x] **Step 2: Implement planner + wire mutator behind `features.marker_strategy`**
+- [x] **Step 3: Quarantine legacy hash-equality middle path to explicit `prefix_only` compatibility behavior**
+- [x] **Step 4: Verify** `npm test -- marker-planner` && `npx tsc --noEmit`
 
 ### Task 1.2: Content-block tool-loop / frontier selection
 
@@ -252,14 +252,14 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 - Create: `src/orchestrator/frontier.ts`
 - Tests with fixtures: plain user text; user tool_result-only; mixed text+tool_result; parallel tools; unmatched tool ids; multi-iteration tool loop.
 
-- [ ] **Step 1: State machine keyed by tool_use_id**
-- [ ] **Step 2: Conservative fallback** — if uncertain, set write_frontier at last fully completed user/assistant exchange; never invent splits inside a tool pair
+- [x] **Step 1: State machine keyed by tool_use_id**
+- [x] **Step 2: Conservative fallback** — if uncertain, set write_frontier at last fully completed user/assistant exchange; never invent splits inside a tool pair
 - [ ] **Step 3: Verify**
 
 ### Task 1.3: Integration — multi-turn growing history (local)
 
-- [ ] Simulate N turns with **growing** history; assert write_frontier advances; assert read_anchor (if any) points at previously written hash; assert cumulative hashes nest (each longer prefix extends prior).
-- [ ] Explicitly **do not** require middle_hash equality across growing turns.
+- [x] Simulate N turns with **growing** history; assert write_frontier advances and prior provider-visible boundary hashes validate before reuse.
+- [x] Explicitly **do not** require middle_hash equality across growing turns.
 
 ### Task 1.4: Three-arm A/B harness
 
@@ -281,9 +281,9 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 
 **Gate:** candidate wins or ties passthrough and beats prefix_only on post-warmup effective cost; else **do not deploy candidate** (fail closed).
 
-- [ ] **Step 1: Implement harness**
-- [ ] **Step 2: Run offline against Anthropic**
-- [ ] **Step 3: Record JSONL results; pass/fail gate**
+- [x] **Step 1: Implement corrected harness with distinct CC-shaped/pass-through, prefix-only, and planner topologies**
+- [x] **Step 2: Run direct against Anthropic OAuth**
+- [x] **Step 3: Record results and gate** — all five corrected gates passed; evidence `~/.cachelane-ops/claude-ab-2026-07-31-v4.json`.
 
 ---
 

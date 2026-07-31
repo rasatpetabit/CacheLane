@@ -45,6 +45,9 @@ const configSchema = z.object({
       k_pruner: z.boolean(),
       keepalive: z.boolean(),
       mutation_enabled: z.boolean().default(true),
+      marker_strategy: z
+        .enum(["passthrough", "prefix_only", "candidate"])
+        .default("prefix_only"),
     })
     .default(DEFAULT_CONFIG.features),
   health: z

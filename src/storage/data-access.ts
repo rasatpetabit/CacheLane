@@ -17,6 +17,7 @@ import type {
   TurnExplanationPruneDecision,
   TurnExplanationBlockMetadata,
   TurnExplanationRegionMetadata,
+  TurnMeasurementProvenance,
   InsertTurnExplanationParams,
   TurnExplanationRow,
   TurnExplanationRecord,
@@ -197,6 +198,9 @@ export function rowToTurnExplanation(
       cache_read_tokens: row.usage_cache_read_tokens,
       effective_cost_units: row.usage_effective_cost_units,
     },
+    provenance: row.provenance_json
+      ? parseJson<TurnMeasurementProvenance | null>(row.provenance_json, null)
+      : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -460,7 +464,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
        region_metadata_json, region_cost_json, signals_json,
        usage_input_tokens, usage_output_tokens,
        usage_cache_creation_5m_tokens, usage_cache_creation_1h_tokens,
-       usage_cache_read_tokens, usage_effective_cost_units,
+       usage_cache_read_tokens, usage_effective_cost_units, provenance_json,
        created_at, updated_at)
     VALUES
       (@turn_id, @workspace_id, @session_id, @turn_number, @model,
@@ -469,7 +473,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
        @region_metadata_json, @region_cost_json, @signals_json,
        @usage_input_tokens, @usage_output_tokens,
        @usage_cache_creation_5m_tokens, @usage_cache_creation_1h_tokens,
-       @usage_cache_read_tokens, @usage_effective_cost_units,
+       @usage_cache_read_tokens, @usage_effective_cost_units, @provenance_json,
        @created_at, @updated_at)
     ON CONFLICT(workspace_id, session_id, turn_number) DO UPDATE SET
       -- turn_id is deliberately NOT reassigned. The turns table uses
@@ -492,6 +496,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
       usage_cache_creation_1h_tokens = excluded.usage_cache_creation_1h_tokens,
       usage_cache_read_tokens = excluded.usage_cache_read_tokens,
       usage_effective_cost_units = excluded.usage_effective_cost_units,
+      provenance_json = excluded.provenance_json,
       updated_at = excluded.updated_at
   `);
 
@@ -504,6 +509,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
         usage_cache_read_tokens = @cache_read_tokens,
         usage_effective_cost_units = @effective_cost_units,
         region_cost_json = @region_cost_json,
+        provenance_json = json_set(COALESCE(provenance_json, '{}'), '$.usage_missing', json('false')),
         updated_at = @updated_at
     WHERE turn_id = @turn_id
   `);
@@ -752,6 +758,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
       region_metadata_json: stableJson(p.region_metadata),
       region_cost_json: p.region_cost ? stableJson(p.region_cost) : null,
       signals_json: stableJson(p.signals),
+      provenance_json: stableJson(p.provenance ?? {}),
       usage_input_tokens: usage.input_tokens,
       usage_output_tokens: usage.output_tokens,
       usage_cache_creation_5m_tokens: usage.cache_creation_5m_tokens,

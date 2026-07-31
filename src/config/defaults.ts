@@ -38,6 +38,7 @@ export const DEFAULT_CONFIG: CachelaneConfig = {
     k_pruner: true,
     keepalive: true,
     mutation_enabled: true,
+    marker_strategy: "prefix_only",
   },
   health: {
     fallback_warning_threshold_pct: 5,

@@ -232,6 +232,8 @@ cachelane stats --scope all --session-id <session-id>
 
 Sessions are keyed by Claude Code's own session id, so the value in the `cachelane sessions` table is exactly what `--session-id` expects.
 
+For the local dual-lane installation, run `node scripts/stats-dual.mjs`. Treat its `token_reuse_index` as a provider-normalized reuse ratio, not USD savings. LiteLLM's OpenAI-style cached-token fields may reflect provider automatic caching; they do not prove CacheLane's Anthropic marker planner is effective. Controlled Claude conformance and three-arm measurement procedures are in [`docs/runbook-claude-effectiveness.md`](docs/runbook-claude-effectiveness.md).
+
 ### Per-block cost attribution (`explain --top-blocks`)
 
 `cachelane stats` shows aggregate savings, but it doesn't tell you *which blocks* are eating your budget. The `--top-blocks` flag on `explain` breaks that down:

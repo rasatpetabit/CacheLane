@@ -88,6 +88,7 @@ export interface CachelaneConfig {
     k_pruner: boolean;
     keepalive: boolean;
     mutation_enabled: boolean;
+    marker_strategy: "passthrough" | "prefix_only" | "candidate";
   };
   health: {
     fallback_warning_threshold_pct: number;

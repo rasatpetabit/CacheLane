@@ -69,6 +69,12 @@ const data: ReportData = {
     savings_ratio: 0.573,
     pipeline_fallback_turns: 1,
     outcome_counts: { mutated: 1, no_op: 1, baseline: 1, fail_open: 1 },
+    route_counts: { proxy: 3, hook: 1, other: 0 },
+    usage_counts: { recorded: 3, missing: 1, unknown: 0 },
+    usage_missing_rate: 0.25,
+    logical_input_tokens: 300,
+    token_reuse_index: 0.4,
+    provider_native_cost: 0,
     pruner_counts: {
       pruned_blocks: 2,
       tokens_reclaimed: 420,

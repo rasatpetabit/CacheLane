@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { orchestrate, CacheStateTracker } from "../index.js";
+import type { Classification } from "../../classifier/index.js";
 import type { AnthropicMessage, AnthropicMessagesRequest, OrchestratorInput } from "../types.js";
 
-const classification = {
-  kind: "prior_turn" as const,
-  volatility: "SEMI" as const,
+const classification: Classification = {
+  kind: "prior_turn",
+  volatility: "SEMI",
   isPinned: false,
-  signals: ["prior_turn"] as const,
+  signals: ["prior_turn"],
 };
 
 function request(messages: AnthropicMessage[]): AnthropicMessagesRequest {

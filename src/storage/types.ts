@@ -270,6 +270,29 @@ export interface RegionCostBreakdown {
   volatile: RegionCost;
 }
 
+export interface MarkerProvenance {
+  location: "tool" | "system" | "message";
+  index: string;
+  ttl: "5m" | "1h";
+}
+
+export interface TurnMeasurementProvenance {
+  build_sha: string | null;
+  config_hash: string | null;
+  experiment_arm: "passthrough" | "prefix_only" | "candidate" | "prod";
+  route: "proxy" | "hook" | "other";
+  outcome: "ok" | "fallback" | "error";
+  usage_missing: boolean;
+  incoming_markers: MarkerProvenance[];
+  emitted_markers: MarkerProvenance[];
+  prefix_hash_at_bp: string[];
+  prune_transforms: Array<{
+    block_id: string;
+    original_tokens: number;
+    stub_tokens: number;
+  }>;
+}
+
 export interface InsertTurnExplanationParams {
   turn_id: string;
   workspace_id: string;
@@ -286,6 +309,7 @@ export interface InsertTurnExplanationParams {
   region_cost?: RegionCostBreakdown;
   signals: string[];
   usage?: Partial<TurnExplanationUsage>;
+  provenance?: TurnMeasurementProvenance;
   created_at: number;
   updated_at: number;
 }
@@ -312,6 +336,7 @@ export interface TurnExplanationRow {
   usage_cache_creation_1h_tokens: number;
   usage_cache_read_tokens: number;
   usage_effective_cost_units: number;
+  provenance_json: string;
   created_at: number;
   updated_at: number;
 }
@@ -333,6 +358,7 @@ export interface TurnExplanationRecord {
   region_cost: RegionCostBreakdown | null;
   signals: string[];
   usage: TurnExplanationUsage;
+  provenance: TurnMeasurementProvenance | null;
   created_at: number;
   updated_at: number;
 }

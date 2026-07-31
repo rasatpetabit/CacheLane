@@ -48,6 +48,47 @@ function turn(
 }
 
 describe("measurement dimensions", () => {
+  it("round-trips per-turn marker and experiment provenance", () => {
+    const now = Date.now();
+    db.insertTurnExplanation({
+      turn_id: "turn-provenance",
+      workspace_id: "w",
+      session_id: "s",
+      turn_number: 1,
+      model: "claude",
+      prefix_breakpoint_hash: "prefix",
+      middle_breakpoint_hash: "middle",
+      mutated: true,
+      pruned_blocks_count: 0,
+      prune_decisions: [],
+      block_metadata: [],
+      region_metadata: { message_count: 1, stable_count: 0, semi_count: 0, volatile_count: 1 },
+      signals: ["prefix_marker_emitted"],
+      provenance: {
+        build_sha: "abc",
+        config_hash: "cfg",
+        experiment_arm: "candidate",
+        route: "proxy",
+        outcome: "ok",
+        usage_missing: true,
+        incoming_markers: [{ location: "system", index: "0", ttl: "5m" }],
+        emitted_markers: [{ location: "message", index: "1:0", ttl: "5m" }],
+        prefix_hash_at_bp: ["prefix", "middle"],
+        prune_transforms: [],
+      },
+      created_at: now,
+      updated_at: now,
+    });
+
+    const stored = db.getTurnExplanation({ workspace_id: "w", session_id: "s", turn_number: 1 });
+    expect(stored?.provenance).toMatchObject({
+      experiment_arm: "candidate",
+      route: "proxy",
+      usage_missing: true,
+      prefix_hash_at_bp: ["prefix", "middle"],
+    });
+  });
+
   it("keeps route independent from pipeline outcome", () => {
     db.insertTurn(turn("t1"));
     db.insertTurn(turn("t2", {
