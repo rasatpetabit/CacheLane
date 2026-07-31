@@ -51,16 +51,22 @@ function stripApiMarkers<T>(value: T): T {
   return rest as T;
 }
 
-function hashPayload(request: AnthropicMessagesRequest, messageEnd: number | null): unknown {
+function hashPayload(
+  request: AnthropicMessagesRequest,
+  messageEnd: number | null,
+  contentEnd?: number,
+): unknown {
   return {
     model: request.model,
     // Only API-level blocks own cache_control. Tool schemas are opaque and may
     // legitimately contain a property with that name.
     tools: (request.tools ?? []).map(stripApiMarkers),
     system: (request.system ?? []).map(stripApiMarkers),
-    messages: messageEnd === null ? [] : request.messages.slice(0, messageEnd + 1).map((message) => ({
+    messages: messageEnd === null ? [] : request.messages.slice(0, messageEnd + 1).map((message, index) => ({
       ...message,
-      content: message.content.map(stripApiMarkers),
+      content: message.content
+        .slice(0, index === messageEnd && contentEnd !== undefined ? contentEnd + 1 : undefined)
+        .map(stripApiMarkers),
     })),
   };
 }
@@ -68,8 +74,9 @@ function hashPayload(request: AnthropicMessagesRequest, messageEnd: number | nul
 export function cumulativePrefixHash(
   request: AnthropicMessagesRequest,
   messageEnd: number | null,
+  contentEnd?: number,
 ): string {
-  return createHash("sha256").update(canonical(hashPayload(request, messageEnd))).digest("hex");
+  return createHash("sha256").update(canonical(hashPayload(request, messageEnd, contentEnd))).digest("hex");
 }
 
 function clientMarkers(request: AnthropicMessagesRequest): ClientMarker[] {
@@ -101,7 +108,7 @@ export function planMarkers(
 ): MarkerPlan {
   const staticPrefix = staticMarker(request, prefixTtl);
   const incoming = clientMarkers(request);
-  if (prefixTtl === "5m" && incoming.some((m) => m.ttl === "1h")) {
+  if (staticPrefix && prefixTtl === "5m" && incoming.some((m) => m.ttl === "1h")) {
     return { strategy: "fail_preserve_client", markers: [], signals: ["markers:fail_preserve"] };
   }
 
@@ -123,7 +130,9 @@ export function planMarkers(
   const anchorMessage = deepest ? request.messages[deepest.message_index] : undefined;
   const anchorContentValid = anchorMessage && deepest && deepest.content_index >= 0 &&
     deepest.content_index < anchorMessage.content.length;
-  const anchorHash = deepest && anchorContentValid ? cumulativePrefixHash(request, deepest.message_index) : null;
+  const anchorHash = deepest && anchorContentValid
+    ? cumulativePrefixHash(request, deepest.message_index, deepest.content_index)
+    : null;
   // Client-marker provenance has no persisted CacheLane hash to validate.
   // Persisted CacheLane frontiers do: never reuse them after history edits.
   const usingPreviousAnchor = incoming.length === 0 && previous?.middle_hash !== undefined;
@@ -147,7 +156,7 @@ export function planMarkers(
       ...frontier,
       ttl: "5m",
       role: "write_frontier",
-      cumulative_hash: cumulativePrefixHash(request, frontier.message_index),
+      cumulative_hash: cumulativePrefixHash(request, frontier.message_index, frontier.content_index),
     });
   }
 

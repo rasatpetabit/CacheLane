@@ -79,19 +79,21 @@ export function orchestrate(
 
     const now = Date.now();
     const writeFrontier = markerPlan.markers.find((marker) => marker.role === "write_frontier");
-    tracker.update(input.workspace_id, input.session_id, {
-      workspace_id: input.workspace_id,
-      prefix_hash: breakpoints.prefix_hash,
-      middle_hash: writeFrontier?.cumulative_hash ?? null,
-      middle_message_index: writeFrontier?.message_index,
-      middle_content_index: writeFrontier?.content_index,
-      prefix_token_count: tokenCount,
-      ttl_class: ttlClass,
-      cached_at_ms: now,
-      last_read_at_ms: now,
-      expected_expiry_ms: now + TTL_MS[ttlClass],
-      keepalive_pings_since_last_turn: 0,
-    });
+    if (markerPlan.strategy !== "fail_preserve_client" && markerPlan.markers.length > 0) {
+      tracker.update(input.workspace_id, input.session_id, {
+        workspace_id: input.workspace_id,
+        prefix_hash: breakpoints.prefix_hash,
+        middle_hash: writeFrontier?.cumulative_hash ?? null,
+        middle_message_index: writeFrontier?.message_index,
+        middle_content_index: writeFrontier?.content_index,
+        prefix_token_count: tokenCount,
+        ttl_class: ttlClass,
+        cached_at_ms: now,
+        last_read_at_ms: now,
+        expected_expiry_ms: now + TTL_MS[ttlClass],
+        keepalive_pings_since_last_turn: 0,
+      });
+    }
 
     const didMutate = markerPlan.strategy !== "fail_preserve_client" &&
       markerPlan.markers.length > 0;

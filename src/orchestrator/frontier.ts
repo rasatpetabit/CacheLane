@@ -32,8 +32,13 @@ function hasUnmatchedToolResult(messages: AnthropicMessage[], index: number): bo
  * frontier before that message.
  */
 export function findWriteFrontier(messages: AnthropicMessage[]): MessageFrontier | null {
-  if (messages.length < 2) return null;
-  let candidate = messages.length - 2;
+  if (messages.length === 0) return null;
+  // A trailing user message is current input; a trailing assistant message is a
+  // completed response received from the prior turn and is safe to cache now.
+  let candidate = messages.at(-1)?.role === "user"
+    ? messages.length - 2
+    : messages.length - 1;
+  if (candidate < 0) return null;
 
   for (let i = 0; i <= candidate; i++) {
     if (hasUnmatchedToolResult(messages, i)) {

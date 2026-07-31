@@ -13,6 +13,11 @@ describe("findWriteFrontier", () => {
     expect(findWriteFrontier(messages)).toEqual({ message_index: 1, content_index: 0 });
   });
 
+  it("uses a trailing assistant message as completed history", () => {
+    const messages = [text("user", "u1"), text("assistant", "a1")];
+    expect(findWriteFrontier(messages)).toEqual({ message_index: 1, content_index: 0 });
+  });
+
   it("keeps a completed parallel tool-use/result exchange together", () => {
     const messages: AnthropicMessage[] = [
       text("user", "u1"),

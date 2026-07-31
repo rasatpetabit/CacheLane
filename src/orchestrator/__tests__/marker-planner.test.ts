@@ -51,7 +51,7 @@ describe("planMarkers", () => {
         { role: "user", content: [{ type: "text", text: "u2" }] },
         { role: "assistant", content: [{ type: "text", text: "a2" }] },
         { role: "user", content: [{ type: "text", text: "u3" }] },
-      ]), 1),
+      ]), 1, 0),
       middle_message_index: 1,
       middle_content_index: 0,
       prefix_token_count: 10,
