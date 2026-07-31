@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import https from "node:https";
+import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { randomUUID, createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -493,9 +494,51 @@ export function createProxyServer(
   // healthcheck failure counter armed to fire the moment the last client quit.
   let inflight = 0;
 
-  return http.createServer((req, res) => {
+  /**
+   * Sockets currently carrying a response. `clientError` can fire on a socket
+   * whose *previous*, perfectly valid pipelined request is still being answered
+   * — in that case writing a raw status line would splice "HTTP/1.1 400..."
+   * into the middle of that response body. A WeakSet keeps this free of
+   * lifetime management: entries vanish with the socket.
+   */
+  // Typed as Duplex, not net.Socket: `clientError` hands back the transport,
+  // which may be a TLSSocket, and both are Duplex.
+  /**
+   * How many responses are currently in flight on each socket.
+   *
+   * A count, not a set: a pipelining client can have several valid requests
+   * outstanding at once, and closing when the *first* completes would truncate
+   * the rest. The socket is only safe to tear down at zero.
+   */
+  const activeResponses = new WeakMap<Duplex, number>();
+  /** Sockets whose connection must be torn down once they reach zero. */
+  const closeAfterResponse = new WeakSet<Duplex>();
+
+  const server = http.createServer((req, res) => {
+    const socket = req.socket;
+    activeResponses.set(socket, (activeResponses.get(socket) ?? 0) + 1);
+    let released = false;
+    const releaseSocket = () => {
+      if (released) return;
+      released = true;
+      const remaining = (activeResponses.get(socket) ?? 1) - 1;
+      if (remaining > 0) {
+        activeResponses.set(socket, remaining);
+        return;
+      }
+      activeResponses.delete(socket);
+      // A malformed pipelined request arrived while responses were streaming.
+      // The connection is unusable — the parser is out of sync — but every
+      // in-flight response was legitimate and has now been delivered intact.
+      if (closeAfterResponse.delete(socket)) socket.destroy();
+    };
+    res.on("finish", releaseSocket);
+    res.on("close", releaseSocket);
+
     const pathForInflight = (req.url ?? "/").split("?")[0];
     const countsAsWork = !(req.method === "GET" && pathForInflight === "/healthz");
+    // Correlates the `incoming` line with its terminal span below.
+    const requestId = randomUUID();
     if (countsAsWork) {
       inflight += 1;
       // Decrement on whichever of "finish" (clean completion) or "close"
@@ -512,6 +555,35 @@ export function createProxyServer(
       };
       res.on("finish", settle);
       res.on("close", settle);
+
+      // Terminal span. Until now the proxy recorded no request durations at all
+      // — every Date.now() in this file was a record timestamp, never a t0/t1
+      // pair — so "CacheLane is slow" was unfalsifiable, and so was any claim
+      // that it had been fixed. `incoming` below had no completion event and no
+      // correlation id, which also meant an aborted request left a dangling
+      // start line that looked identical to one still in flight.
+      const startedAt = process.hrtime.bigint();
+      let spanEmitted = false;
+      const emitSpan = () => {
+        if (spanEmitted) return;
+        spanEmitted = true;
+        logger.info(
+          "request complete",
+          JSON.stringify({
+            req_id: requestId,
+            method: req.method ?? "GET",
+            path: req.url ?? "/",
+            status: res.statusCode,
+            // `finish` means the response was fully flushed; `close` without it
+            // means the client went away or the stream was destroyed mid-flight.
+            // Distinguishing them is what makes a silent SSE truncation visible.
+            completed: res.writableFinished,
+            t_total_ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
+          }),
+        );
+      };
+      res.on("finish", emitSpan);
+      res.on("close", emitSpan);
     }
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -536,7 +608,10 @@ export function createProxyServer(
         return;
       }
 
-      logger.info("incoming", JSON.stringify({ method, path: reqPath }));
+      logger.info(
+        "incoming",
+        JSON.stringify({ req_id: requestId, method, path: reqPath, bytes_in: body.length }),
+      );
 
       // Only intercept routes a provider adapter claims. Claude Code appends
       // ?beta=true and similar query params; matchRoute strips the query itself.
@@ -949,6 +1024,55 @@ export function createProxyServer(
       res.end();
     });
   });
+
+  /**
+   * Malformed or truncated requests that fail before Node can parse them never
+   * reach the handler above, so they produced no `incoming` line and no error —
+   * they were structurally invisible, which is part of why the operator saw
+   * "hangs with no error messages".
+   *
+   * Attaching this listener *replaces* Node's default handler, which responds
+   * 400 (or 431 for oversized headers) and then closes. So the socket disposal
+   * is our responsibility now: logging alone would leak every malformed
+   * connection. Respond when the socket can still take bytes, then destroy
+   * unconditionally.
+   */
+  server.on("clientError", (err: NodeJS.ErrnoException, socket) => {
+    logger.warn(
+      "client error",
+      JSON.stringify({ code: err.code ?? null, message: err.message }),
+    );
+    // With pipelining, clientError can fire for a malformed request while an
+    // earlier valid one on the same socket is still streaming. Writing a status
+    // line then would splice "HTTP/1.1 400..." into that response's body, and
+    // destroying now would truncate a legitimate reply. Let it finish, then tear
+    // the connection down — the parser is out of sync, so it cannot be reused.
+    if ((activeResponses.get(socket) ?? 0) > 0) {
+      closeAfterResponse.add(socket);
+      return;
+    }
+
+    if (err.code === "ECONNRESET" || !socket.writable) {
+      socket.destroy();
+      return;
+    }
+
+    const status = err.code === "HPE_HEADER_OVERFLOW"
+      ? "431 Request Header Fields Too Large"
+      : "400 Bad Request";
+    socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
+
+    // `end()` sends FIN but only half-closes: a peer that never closes its own
+    // write side would keep the connection — and its memory — indefinitely.
+    // Destroying immediately would discard the unflushed status line, so give
+    // it a moment, then force the close. Unref'd so it cannot hold the process
+    // open on shutdown.
+    const forceClose = setTimeout(() => socket.destroy(), 1_000);
+    forceClose.unref();
+    socket.once("close", () => clearTimeout(forceClose));
+  });
+
+  return server;
 }
 
 function recordFallbackExplanation(opts: Pick<
