@@ -108,7 +108,10 @@ export function mutateRequest(
         marker.message_index !== undefined &&
         marker.content_index !== undefined
       ) {
-        const content = out.messages[marker.message_index]?.content[marker.content_index];
+        const message = out.messages[marker.message_index];
+        const content = message && Array.isArray(message.content)
+          ? message.content[marker.content_index]
+          : undefined;
         if (content) content.cache_control = control;
       }
     }
@@ -125,7 +128,10 @@ export function mutateRequest(
       boundaries.middle_end_in_messages !== null &&
       boundaries.middle_end_in_messages > 0
     ) {
-      const content = out.messages[boundaries.middle_end_in_messages - 1]?.content.at(-1);
+      const message = out.messages[boundaries.middle_end_in_messages - 1];
+      const content = message && Array.isArray(message.content)
+        ? message.content.at(-1)
+        : undefined;
       if (content) content.cache_control = markerControl("5m");
     }
   }

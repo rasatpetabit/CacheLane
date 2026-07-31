@@ -74,10 +74,6 @@ function humanizeText(text) {
     .join("\n");
 }
 
-function percent(value) {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
 function runStatsJson(home) {
   try {
     const raw = run(home, ["stats", "--scope", "all", "--json"]);
@@ -92,16 +88,9 @@ for (const h of homes) {
   console.log(`\n======== ${h.name}  CACHELANE_HOME=${h.home} ========`);
   const statsText = humanizeText(run(h.home, ["stats", "--scope", "all"]).trim());
   console.log(statsText);
-  const stats = runStatsJson(h.home);
-  if (stats) {
-    const routes = stats.route_counts ?? {};
-    const usage = stats.usage_counts ?? {};
-    console.log(`Path: proxy ${routes.proxy ?? 0} / hook ${routes.hook ?? 0} / other ${routes.other ?? 0}`);
-    console.log(`Usage: recorded ${usage.recorded ?? 0} / missing ${usage.missing ?? 0} / unknown ${usage.unknown ?? 0}`);
-    console.log(`Usage missing rate: ${percent(stats.usage_missing_rate ?? 0)}`);
-    console.log(`Token reuse index: ${percent(stats.token_reuse_index ?? 0)}`);
-    console.log(`Provider native cost: ${(stats.provider_native_cost ?? 0) > 0 ? stats.provider_native_cost.toFixed(0) : "n/a"}`);
-  }
+  // Keep a tolerant JSON read as a forward-compatibility check. Human stats
+  // already prints these dimensions, so do not duplicate them here.
+  runStatsJson(h.home);
   console.log("--- sessions (top) ---");
   const sessions = run(h.home, ["sessions"]).trim().split("\n").slice(0, 12).join("\n");
   console.log(humanizeText(sessions));

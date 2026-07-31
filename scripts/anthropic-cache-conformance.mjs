@@ -45,6 +45,7 @@ async function call(label, messages) {
     headers: {
       "content-type": "application/json",
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "oauth-2025-04-20",
       "authorization": `Bearer ${token}`,
     },
     body: JSON.stringify({ model, max_tokens: 1, messages }),
@@ -100,4 +101,4 @@ mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(report, null, 2));
 console.log(JSON.stringify(report, null, 2));
 console.error(`wrote → ${out}`);
-if (!report.gates.anchor_read_observed || !report.gates.no_http_errors) process.exitCode = 2;
+if (!report.gates.anchor_read_observed || !report.gates.deeper_read_observed || !report.gates.no_http_errors) process.exitCode = 2;

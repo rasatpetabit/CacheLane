@@ -36,6 +36,8 @@ function runStats(home) {
 }
 
 function installedSha() {
+  const defaultCli = "/srv/cachelane/dist/cli/index.cjs";
+  if (cli !== defaultCli) return null;
   try { return readFileSync("/srv/cachelane/GIT_SHA", "utf8").trim(); }
   catch { return null; }
 }
@@ -44,6 +46,7 @@ const snapshot = {
   ts: new Date().toISOString(),
   label,
   installed_sha: installedSha(),
+  cli_path: cli,
   stats_schema: 1,
   lanes: Object.fromEntries(homes.map(([name, home]) => [name, { home, stats: runStats(home) }])),
 };

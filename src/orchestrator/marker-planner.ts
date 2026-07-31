@@ -43,32 +43,33 @@ function canonical(value: unknown, seen = new Set<object>()): string {
   return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k], seen)}`).join(",")}}`;
 }
 
-function withoutMarkers<T>(value: T, seen = new Map<object, unknown>()): T {
+function stripApiMarkers<T>(value: T): T {
   if (!value || typeof value !== "object") return value;
-  const known = seen.get(value);
-  if (known !== undefined) return known as T;
-  if (Array.isArray(value)) {
-    const out: unknown[] = [];
-    seen.set(value, out);
-    for (const item of value) out.push(withoutMarkers(item, seen));
-    return out as T;
-  }
-  const out: Record<string, unknown> = {};
-  seen.set(value, out);
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (k !== "cache_control") out[k] = withoutMarkers(v, seen);
-  }
-  return out as T;
+  if (Array.isArray(value)) return value.map((item) => stripApiMarkers(item)) as T;
+  const { cache_control: _marker, ...rest } = value as Record<string, unknown>;
+  void _marker;
+  return rest as T;
 }
 
-function hashThrough(request: AnthropicMessagesRequest, messageEnd: number | null): string {
-  const prefix = {
+function hashPayload(request: AnthropicMessagesRequest, messageEnd: number | null): unknown {
+  return {
     model: request.model,
-    tools: withoutMarkers(request.tools ?? []),
-    system: withoutMarkers(request.system ?? []),
-    messages: messageEnd === null ? [] : withoutMarkers(request.messages.slice(0, messageEnd + 1)),
+    // Only API-level blocks own cache_control. Tool schemas are opaque and may
+    // legitimately contain a property with that name.
+    tools: (request.tools ?? []).map(stripApiMarkers),
+    system: (request.system ?? []).map(stripApiMarkers),
+    messages: messageEnd === null ? [] : request.messages.slice(0, messageEnd + 1).map((message) => ({
+      ...message,
+      content: message.content.map(stripApiMarkers),
+    })),
   };
-  return createHash("sha256").update(canonical(prefix)).digest("hex");
+}
+
+export function cumulativePrefixHash(
+  request: AnthropicMessagesRequest,
+  messageEnd: number | null,
+): string {
+  return createHash("sha256").update(canonical(hashPayload(request, messageEnd))).digest("hex");
 }
 
 function clientMarkers(request: AnthropicMessagesRequest): ClientMarker[] {
@@ -82,7 +83,7 @@ function clientMarkers(request: AnthropicMessagesRequest): ClientMarker[] {
 }
 
 function staticMarker(request: AnthropicMessagesRequest, ttl: CacheTier): PlannedMarker | null {
-  const cumulative_hash = hashThrough(request, null);
+  const cumulative_hash = cumulativePrefixHash(request, null);
   if ((request.system?.length ?? 0) > 0) {
     return { location: "system", system_index: request.system!.length - 1, ttl, role: "static_prefix", cumulative_hash };
   }
@@ -119,7 +120,15 @@ export function planMarkers(
         }
       : undefined
   );
-  if (deepest && frontier && deepest.message_index < request.messages.length &&
+  const anchorMessage = deepest ? request.messages[deepest.message_index] : undefined;
+  const anchorContentValid = anchorMessage && deepest && deepest.content_index >= 0 &&
+    deepest.content_index < anchorMessage.content.length;
+  const anchorHash = deepest && anchorContentValid ? cumulativePrefixHash(request, deepest.message_index) : null;
+  // Client-marker provenance has no persisted CacheLane hash to validate.
+  // Persisted CacheLane frontiers do: never reuse them after history edits.
+  const usingPreviousAnchor = incoming.length === 0 && previous?.middle_hash !== undefined;
+  const previousAnchorValid = !usingPreviousAnchor || previous?.middle_hash === anchorHash;
+  if (deepest && frontier && anchorContentValid && previousAnchorValid &&
       (deepest.message_index < frontier.message_index ||
        (deepest.message_index === frontier.message_index && deepest.content_index < frontier.content_index))) {
     markers.push({
@@ -128,7 +137,7 @@ export function planMarkers(
       content_index: deepest.content_index,
       ttl: deepest.ttl,
       role: "read_anchor",
-      cumulative_hash: hashThrough(request, deepest.message_index),
+      cumulative_hash: anchorHash!,
     });
   }
 
@@ -138,7 +147,7 @@ export function planMarkers(
       ...frontier,
       ttl: "5m",
       role: "write_frontier",
-      cumulative_hash: hashThrough(request, frontier.message_index),
+      cumulative_hash: cumulativePrefixHash(request, frontier.message_index),
     });
   }
 

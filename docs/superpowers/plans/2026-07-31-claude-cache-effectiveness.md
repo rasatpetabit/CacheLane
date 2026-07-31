@@ -197,9 +197,10 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 6. **Prune/stub between turns** — same marker depth after early tool_result → stub; measure cache invalidation.
 7. **CC-shaped markers alone** — pass-through of Claude Code markers without CacheLane mutation (baseline growth curve).
 
-- [x] **Step 1: Implement probes with structured JSON results** (`scripts/anthropic-cache-conformance.mjs`)
-- [x] **Step 2: Run initial retained-anchor/deeper-frontier probe** (2026-07-31, Haiku 4.5): write=20,305 creation; anchor read=20,305; deeper write=20,305 read + 22 creation; deeper read=20,327. HTTP 200 for all. Durable production-path result still required under `~/.cachelane-ops/` before deploy.
-- [x] **Step 3: Gate** — **passed for retained old anchor + new frontier**. This does *not* approve the single-moving-marker variant; Phase 1 must implement the retained-anchor/write-frontier strategy proven by this probe.
+- [x] **Step 1: Implement initial structured probe** (`scripts/anthropic-cache-conformance.mjs`)
+- [x] **Step 2: Run retained-anchor/deeper-frontier probe** (2026-07-31, Haiku 4.5): write=20,305 creation; anchor read=20,305; deeper write=20,305 read + 22 creation; deeper read=20,327. HTTP 200 for all. Durable production-path result still required under `~/.cachelane-ops/` before deploy.
+- [ ] **Step 3: Complete remaining mandatory probes** (moving-within-lookback, beyond-lookback, parallel tools, all TTL combinations, prune/stub invalidation, CC-shaped pass-through markers) before production deploy.
+- [x] **Step 4: Narrow algorithm gate** — passed only for retained old anchor + new frontier. This does *not* approve the single-moving-marker variant or production deployment.
 
 ### Task 0.5: Instrumentation soak
 
@@ -235,7 +236,7 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 **Rules (must unit-test):**
 
 1. Global TTL order tools → system → messages; never 1h after 5m.
-2. Respect provider max breakpoints; prefer static_prefix + write_frontier; add read_anchor only if conformance proved multi-marker reuse.
+2. Respect provider max breakpoints (current bounded plan emits at most three: static_prefix + one retained read_anchor + one write_frontier). On each turn, drop older ancestors; retain only the immediately previous frontier whose provider-visible cumulative hash still matches.
 3. First eligible frontier is **always written** when strategy is `cachelane_plan`.
 4. If prune may mutate content earlier than frontier, either (a) A/B has prune off, or (b) place anchor before mutable zone, or (c) fail_preserve.
 5. Fail_preserve returns client markers unchanged (modulo already-invalid ordering cleanup only if proven safe).
@@ -270,7 +271,7 @@ node scripts/effectiveness-snapshot.mjs --label pre-fix >> ~/.cachelane-ops/effe
 
 | Arm | Behavior |
 |---|---|
-| `passthrough` | No CacheLane mutation; preserve client markers |
+| `passthrough` | No CacheLane mutation; preserve a captured/synthetic **Claude Code-shaped** incoming marker topology (not marker-free traffic) |
 | `prefix_only` | Current production behavior (or feature-flag equivalent) |
 | `candidate` | New marker planner |
 
