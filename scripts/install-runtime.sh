@@ -5,6 +5,19 @@
 #   cachelane-claude  :7333 → api.anthropic.com (Claude Code)
 set -euo pipefail
 
+# Must NOT be run under sudo. This script escalates internally (sudo tee, sudo
+# systemctl) and derives every lane path and the unit User= from $HOME/$USER.
+# Under sudo those become /root and root, so it silently rewrites both units to
+# Environment=CACHELANE_HOME=/root/.cachelane-*, starts empty databases,
+# orphans the real ones, and takes the lanes down on a port clash. That is
+# exactly what happened on 2026-07-31. Fail closed instead.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  echo "refusing to run as root: this script self-escalates and derives lane paths from \$HOME/\$USER." >&2
+  echo "run it as the service user (e.g. 'scripts/install-runtime.sh'), not under sudo." >&2
+  echo "note: 'sudo -E' does not help — sudoers env_reset drops CACHELANE_DEPLOY_DRY_RUN too." >&2
+  exit 1
+fi
+
 INSTALL="${CACHELANE_INSTALL:-/srv/cachelane}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UNIT_DIR=/etc/systemd/system
