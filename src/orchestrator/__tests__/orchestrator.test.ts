@@ -41,7 +41,7 @@ describe("orchestrate (integration)", () => {
       original_request: baseRequest,
     };
     const tracker = new CacheStateTracker();
-    const out = orchestrate(input, tracker);
+    const out = orchestrate(input, tracker, undefined, "candidate");
     expect(out.mutated).toBe(true);
     // H5: prefix marker lands on the last system block (covers tools + system).
     expect(out.request.system?.at(-1)?.cache_control).toEqual({
@@ -64,7 +64,7 @@ describe("orchestrate (integration)", () => {
       original_request: baseRequest,
     } as OrchestratorInput;
     const tracker = new CacheStateTracker();
-    const out = orchestrate(input, tracker);
+    const out = orchestrate(input, tracker, undefined, "candidate");
     expect(out.mutated).toBe(false);
     expect(out.signals).toContain("error:fallback");
     expect(out.request).toEqual(baseRequest);
@@ -85,7 +85,7 @@ describe("orchestrate (integration)", () => {
       original_request: requestNoPrefix,
     };
     const tracker = new CacheStateTracker();
-    const out = orchestrate(input, tracker);
+    const out = orchestrate(input, tracker, undefined, "candidate");
     expect(out.mutated).toBe(false);
   });
 
@@ -98,7 +98,7 @@ describe("orchestrate (integration)", () => {
       original_request: baseRequest,
     };
     const tracker = new CacheStateTracker();
-    const out = orchestrate(input, tracker);
+    const out = orchestrate(input, tracker, undefined, "candidate");
     const state = tracker.get("ws-1", "s-1");
     expect(state?.prefix_hash).toBe(out.prefix_hash);
     expect(state?.middle_hash).toBe(out.middle_hash);
@@ -120,7 +120,7 @@ describe("orchestrate (integration)", () => {
       interval_seconds: 150,
       idle_threshold_seconds: 240,
       large_prefix_threshold_tokens: 1,
-    });
+    }, "candidate");
 
     expect(out.request.system?.at(-1)?.cache_control).toEqual({
       type: "ephemeral",
@@ -150,7 +150,7 @@ describe("orchestrate (integration)", () => {
     };
     const tracker = new CacheStateTracker();
 
-    const out = orchestrate(input, tracker);
+    const out = orchestrate(input, tracker, undefined, "candidate");
 
     expect(out.mutated).toBe(true);
     expect(out.signals).toContain("prefix_cached");
@@ -172,7 +172,7 @@ describe("orchestrate (integration)", () => {
     };
     const tracker = new CacheStateTracker();
 
-    const turn1 = orchestrate(input, tracker);
+    const turn1 = orchestrate(input, tracker, undefined, "candidate");
     expect(turn1.request.messages[1]?.content.at(-1)?.cache_control).toEqual({
       type: "ephemeral",
       ttl: "5m",
@@ -190,7 +190,7 @@ describe("orchestrate (integration)", () => {
       message_classifications: [cl("SEMI"), cl("SEMI"), cl("VOLATILE")],
       original_request: baseRequest,
     };
-    const turn1 = orchestrate(turn1Input, tracker);
+    const turn1 = orchestrate(turn1Input, tracker, undefined, "candidate");
 
     const differentMiddleRequest: AnthropicMessagesRequest = {
       ...baseRequest,
@@ -203,6 +203,8 @@ describe("orchestrate (integration)", () => {
     const turn2 = orchestrate(
       { ...turn1Input, current_turn: 2, original_request: differentMiddleRequest },
       tracker,
+      undefined,
+      "candidate",
     );
     expect(turn2.request.messages[1]?.content.at(-1)?.cache_control).toEqual({
       type: "ephemeral",
@@ -265,7 +267,7 @@ describe("orchestrate (integration)", () => {
       original_request: baseRequest,
     };
     const originalJson = JSON.stringify(baseRequest);
-    orchestrate(input, new CacheStateTracker());
+    orchestrate(input, new CacheStateTracker(), undefined, "candidate");
     expect(JSON.stringify(baseRequest)).toBe(originalJson);
   });
 });

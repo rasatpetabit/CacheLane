@@ -80,7 +80,7 @@ export function orchestrate(
   input: OrchestratorInput,
   tracker: CacheStateTracker,
   keepaliveConfig: CachelaneConfig["keepalive"] = DEFAULT_CONFIG.keepalive,
-  markerStrategy: CachelaneConfig["features"]["marker_strategy"] = "candidate",
+  markerStrategy: CachelaneConfig["features"]["marker_strategy"] = "prefix_only",
 ): MutatedRequest {
   try {
     const boundaries = findRegionBoundaries(input.message_classifications);

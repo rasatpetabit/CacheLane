@@ -45,7 +45,7 @@ describe.each(SCENARIOS)("cache-stability %s", (name) => {
           fixture.prev_state,
         );
       }
-      const out = orchestrate(fixture.input, tracker);
+      const out = orchestrate(fixture.input, tracker, undefined, "candidate");
       hashes.push(out.prefix_hash);
     }
     expect(hashes[0]).toBe(hashes[1]);

@@ -43,12 +43,10 @@ function canonical(value: unknown, seen = new Set<object>()): string {
   return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k], seen)}`).join(",")}}`;
 }
 
-function stripApiMarkers<T>(value: T): T {
-  if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((item) => stripApiMarkers(item)) as T;
-  const { cache_control: _marker, ...rest } = value as Record<string, unknown>;
-  void _marker;
-  return rest as T;
+function providerBlock<T>(value: T): T {
+  // API-level cache_control is part of provider-visible cache identity. Do not
+  // recursively alter opaque tool schemas or nested tool payloads.
+  return value;
 }
 
 function hashPayload(
@@ -60,13 +58,13 @@ function hashPayload(
     model: request.model,
     // Only API-level blocks own cache_control. Tool schemas are opaque and may
     // legitimately contain a property with that name.
-    tools: (request.tools ?? []).map(stripApiMarkers),
-    system: (request.system ?? []).map(stripApiMarkers),
+    tools: (request.tools ?? []).map(providerBlock),
+    system: (request.system ?? []).map(providerBlock),
     messages: messageEnd === null ? [] : request.messages.slice(0, messageEnd + 1).map((message, index) => ({
       ...message,
       content: message.content
         .slice(0, index === messageEnd && contentEnd !== undefined ? contentEnd + 1 : undefined)
-        .map(stripApiMarkers),
+        .map(providerBlock),
     })),
   };
 }

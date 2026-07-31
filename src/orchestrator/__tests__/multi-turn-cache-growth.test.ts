@@ -33,7 +33,7 @@ describe("growing multi-turn cache frontier", () => {
       current_turn: 1,
       message_classifications: firstMessages.map(() => classification),
       original_request: request(firstMessages),
-    } satisfies OrchestratorInput, tracker);
+    } satisfies OrchestratorInput, tracker, undefined, "candidate");
 
     const secondMessages = [
       ...firstMessages.slice(0, 2),
@@ -47,7 +47,7 @@ describe("growing multi-turn cache frontier", () => {
       current_turn: 2,
       message_classifications: secondMessages.map(() => classification),
       original_request: request(secondMessages),
-    } satisfies OrchestratorInput, tracker);
+    } satisfies OrchestratorInput, tracker, undefined, "candidate");
 
     expect(first.request.messages[1]?.content[0]?.cache_control).toBeDefined();
     expect(second.request.messages[1]?.content[0]?.cache_control).toBeDefined();

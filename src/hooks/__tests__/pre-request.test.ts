@@ -197,6 +197,7 @@ describe("handlePreRequest", () => {
       message_classifications: [cl("SEMI"), cl("SEMI")],
       block_placements: [placement(blockId)],
       pruner: { enabled: false, k: 3, mode: "default" },
+      marker_strategy: "candidate",
     });
 
     expect(result.effective_message_classifications[0]?.volatility).toBe(
@@ -224,6 +225,7 @@ describe("handlePreRequest", () => {
       message_classifications: [cl("SEMI"), cl("SEMI")],
       block_placements: [placement(blockId)],
       pruner: { enabled: false, k: 3, mode: "default" },
+      marker_strategy: "candidate",
     });
 
     expect(result.effective_message_classifications[0]?.volatility).toBe("SEMI");

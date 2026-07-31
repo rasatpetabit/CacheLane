@@ -263,7 +263,7 @@ export function handlePreRequest(input: PreRequestInput): PreRequestResult {
       },
       input.tracker,
       DEFAULT_CONFIG.keepalive,
-      input.marker_strategy ?? "candidate",
+      input.marker_strategy ?? "prefix_only",
     );
 
     const result = {
