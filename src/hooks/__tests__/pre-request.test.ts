@@ -202,7 +202,8 @@ describe("handlePreRequest", () => {
     expect(result.effective_message_classifications[0]?.volatility).toBe(
       "VOLATILE",
     );
-    expect(result.middle_hash).toBeNull();
+    expect(result.middle_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.signals).toContain("middle_marker_emitted");
   });
 
   it("allows normal classification on the turn after suffix warming", () => {
