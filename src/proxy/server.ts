@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import http from "node:http";
 import https from "node:https";
 import tls from "node:tls";
@@ -47,6 +49,27 @@ function cachedTokenCount(contentHash: string, contentStr: string, model: string
 const DEFAULT_UPSTREAM_HOST = "api.anthropic.com";
 const DEFAULT_UPSTREAM_PORT = 443;
 const DEFAULT_PORT = 7332;
+
+export function resolveBuildSha(
+  envSha = process.env.CACHELANE_BUILD_SHA,
+  installedShaPath = path.join(process.cwd(), "GIT_SHA"),
+  gitCwd = process.cwd(),
+): string {
+  if (envSha) return envSha;
+  try {
+    const installed = fs.readFileSync(installedShaPath, "utf8").trim();
+    if (installed) return installed;
+  } catch { /* development checkout has no installed SHA file */ }
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: gitCwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 /**
  * Inbound auth/signing headers that MUST be stripped before CacheLane re-signs a
@@ -454,18 +477,7 @@ export function createProxyServer(
   const configHash = config
     ? createHash("sha256").update(stableJson(config)).digest("hex")
     : undefined;
-  let buildSha = process.env.CACHELANE_BUILD_SHA;
-  if (!buildSha) {
-    try {
-      buildSha = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-    } catch {
-      buildSha = "unknown";
-    }
-  }
+  const buildSha = resolveBuildSha();
   const upstream: UpstreamTarget = {
     host: opts.upstream?.host ?? config?.proxy.upstream_host ?? DEFAULT_UPSTREAM_HOST,
     port: opts.upstream?.port ?? config?.proxy.upstream_port ?? DEFAULT_UPSTREAM_PORT,
