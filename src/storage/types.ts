@@ -343,6 +343,18 @@ export type PipelineOutcome = "fail_open" | "baseline" | "mutated" | "no_op";
 
 export type PipelineOutcomeCounts = Record<PipelineOutcome, number>;
 
+export interface RouteCounts {
+  proxy: number;
+  hook: number;
+  other: number;
+}
+
+export interface UsageCounts {
+  recorded: number;
+  missing: number;
+  unknown: number;
+}
+
 export interface GetStatsParams {
   scope: StatsScope;
   workspace_id?: string;
@@ -405,8 +417,20 @@ export interface CachelaneStats {
   effective_cost_units: number;
   baseline_cost_units: number;
   savings_ratio: number;
-  /** Exclusive pipeline outcomes. Optional for callers constructing the legacy shape. */
-  outcome_counts?: PipelineOutcomeCounts;
+  /** Exclusive pipeline outcomes; retained in the legacy API shape. */
+  outcome_counts: PipelineOutcomeCounts;
+  /** Request transport/path, independent of pipeline outcome. */
+  route_counts: RouteCounts;
+  /** Explicit provider-usage provenance. Unknown historical rows are not treated as missing. */
+  usage_counts: UsageCounts;
+  /** Fraction of all turns carrying the forward signal `usage:missing`. */
+  usage_missing_rate: number;
+  /** Provider-normalized logical input tokens (OpenAI prompt_tokens; Anthropic sum of components). */
+  logical_input_tokens: number;
+  /** Read tokens / provider-normalized logical input. This is not a cost figure. */
+  token_reuse_index: number;
+  /** Stored provider-native effective cost for OpenAI-chat rows; informational only. */
+  provider_native_cost: number;
   /**
    * Legacy metric: every turn where request_mutated=0, including intentional
    * baseline and no-op turns as well as fail-open turns.

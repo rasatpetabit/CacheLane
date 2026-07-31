@@ -32,11 +32,16 @@ export function formatStats(stats: CachelaneStats): string {
     `Effective cost units: ${stats.effective_cost_units.toFixed(2)}`,
     `Baseline cost units: ${stats.baseline_cost_units.toFixed(2)}`,
     `Savings ratio: ${percent(stats.savings_ratio)}`,
+    `Token reuse index: ${percent(stats.token_reuse_index ?? 0)}`, 
     `Pruned blocks: ${stats.pruner_counts.pruned_blocks}`,
     `Prune actions (cumulative): ${stats.pruner_counts.pruned_blocks}`,
     "Prune actions are cumulative; the same logical block can be pruned again on a later turn.",
     `Tokens reclaimed by pruning: ${stats.pruner_counts.tokens_reclaimed}`,
     `Keepalive pings: ${stats.keepalive_counts.pings}`,
+    `Route: proxy ${stats.route_counts?.proxy ?? 0} / hook ${stats.route_counts?.hook ?? 0} / other ${stats.route_counts?.other ?? 0}`,
+    `Usage: recorded ${stats.usage_counts?.recorded ?? 0} / missing ${stats.usage_counts?.missing ?? 0} / unknown ${stats.usage_counts?.unknown ?? 0}`,
+    `Usage missing rate: ${percent(stats.usage_missing_rate ?? 0)}`,
+    `Provider native cost: ${(stats.provider_native_cost ?? 0) > 0 ? stats.provider_native_cost.toFixed(2) : "n/a"}`,
     `Estimated compression tokens saved: ${stats.compression_counts.tokens_saved}`,
   ].join("\n");
 }

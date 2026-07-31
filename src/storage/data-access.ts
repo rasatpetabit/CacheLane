@@ -910,6 +910,47 @@ export function openDatabase(dbPath: string): CachelaneDb {
     const savingsRatio =
       baseline === 0 ? 0 : (baseline - row.effective_cost_units) / baseline;
 
+    // Route and outcome are independent dimensions. A fail-open still travelled
+    // through the proxy; it must not become a synthetic route.
+    const dimensions = rawDb.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value = 'mode:hook'
+        ) THEN 1 ELSE 0 END), 0) AS hook,
+        COALESCE(SUM(CASE WHEN NOT EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value = 'mode:hook'
+        ) THEN 1 ELSE 0 END), 0) AS proxy,
+        COALESCE(SUM(CASE WHEN EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value = 'usage:recorded'
+        ) THEN 1 ELSE 0 END), 0) AS usage_recorded,
+        COALESCE(SUM(CASE WHEN EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value = 'usage:missing'
+        ) THEN 1 ELSE 0 END), 0) AS usage_missing,
+        COALESCE(SUM(CASE WHEN NOT EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value IN ('usage:recorded', 'usage:missing')
+        ) THEN 1 ELSE 0 END), 0) AS usage_unknown,
+        COALESCE(SUM(CASE
+          WHEN provider = 'openai-chat' THEN input_tokens
+          ELSE input_tokens + cache_read_tokens + cache_creation_5m_tokens + cache_creation_1h_tokens
+        END), 0) AS logical_input,
+        COALESCE(SUM(CASE WHEN provider = 'openai-chat' THEN effective_cost_units ELSE 0 END), 0) AS provider_native_cost
+      FROM turns
+      ${where.sql}
+    `).get(where.bindings) as {
+      hook: number;
+      proxy: number;
+      usage_recorded: number;
+      usage_missing: number;
+      usage_unknown: number;
+      logical_input: number;
+      provider_native_cost: number;
+    };
+
+    // OpenAI input_tokens already contains prompt_tokens, of which cached_tokens
+    // is a subset. Anthropic input_tokens excludes cache reads and writes.
+    const tokenReuseIndex =
+      dimensions.logical_input === 0 ? 0 : row.cache_read_tokens / dimensions.logical_input;
+
     return {
       scope: params.scope,
       workspace_id: params.workspace_id ?? null,
@@ -926,6 +967,20 @@ export function openDatabase(dbPath: string): CachelaneDb {
         mutated: row.mutated_turns,
         no_op: row.no_op_turns,
       },
+      route_counts: {
+        proxy: dimensions.proxy,
+        hook: dimensions.hook,
+        other: 0,
+      },
+      usage_counts: {
+        recorded: dimensions.usage_recorded,
+        missing: dimensions.usage_missing,
+        unknown: dimensions.usage_unknown,
+      },
+      usage_missing_rate: row.turns === 0 ? 0 : dimensions.usage_missing / row.turns,
+      logical_input_tokens: dimensions.logical_input,
+      token_reuse_index: tokenReuseIndex,
+      provider_native_cost: dimensions.provider_native_cost,
       pipeline_fallback_turns: row.pipeline_fallback_turns,
       fail_open_turns: row.fail_open_turns,
       pruner_counts: {

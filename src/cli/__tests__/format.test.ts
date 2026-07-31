@@ -35,6 +35,12 @@ describe("formatStats", () => {
         tokens_saved: 0,
         by_profile: [],
       },
+      route_counts: { proxy: 9, hook: 1, other: 0 },
+      usage_counts: { recorded: 7, missing: 2, unknown: 1 },
+      usage_missing_rate: 0.2,
+      logical_input_tokens: 1_000,
+      token_reuse_index: 0.85,
+      provider_native_cost: 0,
     };
 
     const output = formatStats(stats);
@@ -52,11 +58,16 @@ describe("formatStats", () => {
         "Effective cost units: 100.50",
         "Baseline cost units: 120.00",
         "Savings ratio: 16.3%",
+        "Token reuse index: 85.0%",
         "Pruned blocks: 4",
         "Prune actions (cumulative): 4",
         "Prune actions are cumulative; the same logical block can be pruned again on a later turn.",
         "Tokens reclaimed by pruning: 0",
         "Keepalive pings: 5",
+        "Route: proxy 9 / hook 1 / other 0",
+        "Usage: recorded 7 / missing 2 / unknown 1",
+        "Usage missing rate: 20.0%",
+        "Provider native cost: n/a",
         "Estimated compression tokens saved: 0",
       ].join("\n")
     );

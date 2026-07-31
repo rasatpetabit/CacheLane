@@ -1099,7 +1099,10 @@ function recordUsageFromResponse(
         pruned_blocks_count: opts.prunedCount,
         keepalive_pings_since_last_turn: opts.keepalivePings ?? 0,
         request_mutated: opts.requestMutated ?? 0,
-        signals: opts.signals ? JSON.stringify(opts.signals) : null,
+        signals: JSON.stringify([
+          ...(opts.signals ?? []),
+          "usage:recorded",
+        ]),
         created_at: Date.now(),
       });
     } catch (insertErr) {
