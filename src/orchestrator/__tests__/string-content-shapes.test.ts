@@ -74,6 +74,39 @@ describe("orchestrate tolerates string-form system and message content", () => {
     expect(out.mutated).toBe(true);
   });
 
+  // Not-failing-open is too weak an assertion on its own: a marker planned at a
+  // bogus index is silently dropped by the mutator, so the turn "succeeds" while
+  // caching nothing. Assert the marker actually lands on the emitted request.
+  it("emits a real system marker when system is a string", () => {
+    const request = requestWith({
+      system: "You are Claude." as unknown as AnthropicMessagesRequest["system"],
+    });
+    const out = run(request);
+    expect(out.signals).not.toContain("error:fallback");
+    expect(out.emitted_markers?.some((m) => m.location === "system")).toBe(true);
+    const system = out.request.system;
+    expect(Array.isArray(system)).toBe(true);
+    expect(system?.some((b) => b.cache_control !== undefined)).toBe(true);
+  });
+
+  it("emits a marker on string message content with no system or tools", () => {
+    const request = requestWith({
+      system: undefined,
+      tools: undefined,
+      messages: [
+        { role: "user", content: "old" },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "new" },
+      ] as unknown as AnthropicMessagesRequest["messages"],
+    });
+    const out = run(request);
+    expect(out.signals).not.toContain("error:fallback");
+    const marked = out.request.messages.some(
+      (m) => Array.isArray(m.content) && m.content.some((c) => c.cache_control !== undefined),
+    );
+    expect(marked).toBe(true);
+  });
+
   it("does not fail open when both system and content are strings", () => {
     const request = requestWith({
       system: "You are Claude." as unknown as AnthropicMessagesRequest["system"],

@@ -61,7 +61,7 @@ function hashPayload(
     marker_topology: markerTopology ?? null,
     // Only API-level blocks own cache_control. Tool schemas are opaque and may
     // legitimately contain a property with that name.
-    tools: normalizeBlocks(request.tools).map(providerBlock),
+    tools: (request.tools ?? []).map(providerBlock),
     system: normalizeBlocks(request.system).map(providerBlock),
     messages: messageEnd === null ? [] : request.messages.slice(0, messageEnd + 1).map((message, index) => ({
       ...message,
@@ -93,8 +93,13 @@ function clientMarkers(request: AnthropicMessagesRequest): ClientMarker[] {
 
 function staticMarker(request: AnthropicMessagesRequest, ttl: CacheTier): PlannedMarker | null {
   const cumulative_hash = cumulativePrefixHash(request, null);
-  if ((request.system?.length ?? 0) > 0) {
-    return { location: "system", system_index: request.system!.length - 1, ttl, role: "static_prefix", cumulative_hash };
+  // Index against the normalised block count, never the raw value: a string
+  // `system` reports its character count, which plans a marker at an index the
+  // mutator's single promoted block cannot satisfy — silently losing the
+  // system prefix marker, the single most valuable thing we cache.
+  const systemBlocks = normalizeBlocks(request.system);
+  if (systemBlocks.length > 0) {
+    return { location: "system", system_index: systemBlocks.length - 1, ttl, role: "static_prefix", cumulative_hash };
   }
   if ((request.tools?.length ?? 0) > 0) {
     return { location: "tool", tool_index: request.tools!.length - 1, ttl, role: "static_prefix", cumulative_hash };
@@ -131,7 +136,7 @@ export function planMarkers(
   );
   const anchorMessage = deepest ? request.messages[deepest.message_index] : undefined;
   const anchorContentValid = anchorMessage && deepest && deepest.content_index >= 0 &&
-    deepest.content_index < anchorMessage.content.length;
+    deepest.content_index < normalizeBlocks(anchorMessage.content).length;
   const anchorHash = deepest && anchorContentValid
     ? cumulativePrefixHash(
         request,

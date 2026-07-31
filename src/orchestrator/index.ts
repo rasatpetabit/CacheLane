@@ -37,7 +37,7 @@ const TTL_MS: Record<CacheTier, number> = {
 
 function markerTopology(request: AnthropicMessagesRequest): MarkerTopologyEntry[] {
   const topology: MarkerTopologyEntry[] = [];
-  for (const [index, tool] of normalizeBlocks(request.tools).entries()) {
+  for (const [index, tool] of (request.tools ?? []).entries()) {
     if (tool.cache_control) topology.push({ location: "tool", index: String(index), ttl: tool.cache_control.ttl });
   }
   for (const [index, block] of normalizeBlocks(request.system).entries()) {

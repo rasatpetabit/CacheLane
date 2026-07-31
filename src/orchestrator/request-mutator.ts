@@ -57,14 +57,17 @@ export function mutateRequest(
       ? undefined
       : normalizeBlocks(originalRequest.system).map((s) => ({ ...stripCc(s) })),
     tools: originalRequest.tools?.map((t) => ({ ...stripCc(t) })),
-    messages: originalRequest.messages.map((m) => {
-      // Anthropic API allows content as a plain string; skip deep-copy in that case
-      if (typeof m.content === "string") return { ...m };
-      return {
-        ...m,
-        content: (m.content as AnthropicMessageContent[]).map((c) => ({ ...stripCc(c) })) as AnthropicMessageContent[],
-      };
-    }),
+    // Anthropic API allows content as a plain string. Promote it to the
+    // equivalent single text block for the same reason as system above: the
+    // marker planner normalises string content and can plan a marker at
+    // content index 0, but cache_control cannot be attached to a primitive.
+    // Leaving it a string made the planner and the mutator disagree — the
+    // marker was silently dropped, so a request whose only breakpoint is on
+    // message content (no system, no tools) got no caching at all.
+    messages: originalRequest.messages.map((m) => ({
+      ...m,
+      content: normalizeBlocks(m.content).map((c) => ({ ...stripCc(c) })) as AnthropicMessageContent[],
+    })),
   };
 
   // FIX: Claude Code has a bug where parallel tool results are sometimes sent out of order.

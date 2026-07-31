@@ -49,8 +49,12 @@ export function findWriteFrontier(messages: AnthropicMessage[]): MessageFrontier
   }
 
   while (candidate >= 0) {
-    const content = messages[candidate]?.content;
-    if (Array.isArray(content) && content.length > 0) {
+    // Normalise before measuring: string content is a valid single text block,
+    // and the mutator promotes it to one. Treating it as "not an array" here
+    // skipped it entirely, so an all-string conversation got no write frontier
+    // and therefore no cache marker anywhere.
+    const content = normalizeBlocks(messages[candidate]?.content);
+    if (content.length > 0) {
       return { message_index: candidate, content_index: content.length - 1 };
     }
     candidate--;
