@@ -8,7 +8,10 @@ export type { PostResponseInput, PostResponseResult } from "./hooks/post-respons
 export { openDatabase } from "./storage/index.js";
 export type { CachelaneDb } from "./storage/index.js";
 export { loadConfig } from "./config/index.js";
-export { planAndApplyMarkers } from "./orchestrator/public-marker-planner.js";
+export {
+  candidatePrefixState,
+  planAndApplyMarkers,
+} from "./orchestrator/public-marker-planner.js";
 export type {
   PlannedRequest,
   PublicMarkerStrategy,

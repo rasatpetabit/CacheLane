@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planAndApplyMarkers } from "../public-marker-planner.js";
+import { candidatePrefixState, planAndApplyMarkers } from "../public-marker-planner.js";
 import type { AnthropicMessagesRequest } from "../types.js";
 
 const request = (): AnthropicMessagesRequest => ({
@@ -20,6 +20,22 @@ describe("planAndApplyMarkers", () => {
     expect(result.plan.strategy).toBe("cachelane_plan");
     expect(result.request.system?.[0]?.cache_control?.ttl).toBe("5m");
     expect(result.request.messages[1]?.content[0]?.cache_control?.ttl).toBe("5m");
+  });
+
+  it("carries the previous frontier into a retained read anchor", () => {
+    const first = planAndApplyMarkers(request(), "candidate");
+    const nextRequest = request();
+    nextRequest.messages.splice(2, 0,
+      { role: "user", content: [{ type: "text", text: "follow-up" }] },
+      { role: "assistant", content: [{ type: "text", text: "follow-up answer" }] },
+    );
+    const second = planAndApplyMarkers(nextRequest, "candidate", "5m", candidatePrefixState(first));
+
+    expect(second.plan.markers.map((marker) => marker.role)).toEqual([
+      "static_prefix",
+      "read_anchor",
+      "write_frontier",
+    ]);
   });
 
   it("keeps prefix-only behavior explicit", () => {

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { countTokens, planAndApplyMarkers } from "../dist/index.js";
+import { candidatePrefixState, countTokens, planAndApplyMarkers } from "../dist/index.js";
 
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? (process.argv[i + 1] ?? fallback) : fallback; };
 const sessions = Number(arg("--sessions", "3"));
@@ -33,7 +33,7 @@ async function call(body) {
   return { status: res.status, usage: json.usage ?? null, error: res.ok ? null : json.error?.type ?? "unknown" };
 }
 
-function applyArm(arm, stable, completedHistory, currentTurn) {
+function applyArm(arm, stable, completedHistory, currentTurn, previous) {
   const messages = structuredClone(completedHistory);
   const system = [content(stable, true)];
   if (arm === "passthrough") {
@@ -44,9 +44,9 @@ function applyArm(arm, stable, completedHistory, currentTurn) {
   }
   messages.push({ role: "user", content: [content(`current-${currentTurn}`)] });
   const body = { model, max_tokens: 1, system, messages };
-  if (arm === "candidate") return planAndApplyMarkers(body, "candidate").request;
-  if (arm === "prefix_only") return planAndApplyMarkers(body, "prefix_only").request;
-  return body;
+  if (arm === "candidate") return planAndApplyMarkers(body, "candidate", "5m", previous);
+  if (arm === "prefix_only") return planAndApplyMarkers(body, "prefix_only");
+  return { request: body, plan: null };
 }
 
 async function runArm(arm, session) {
@@ -60,14 +60,19 @@ async function runArm(arm, session) {
   const stable_prefix_tokens = countTokens(stable, model);
   const history = [];
   const rows = [];
+  let previous;
   for (let turn = 1; turn <= turns; turn++) {
     if (turn > 1) {
       history.push({ role: "user", content: [content(`question-${turn - 1}`)] });
       history.push({ role: "assistant", content: [content(`answer-${turn - 1}`)] });
     }
-    const body = applyArm(arm, stable, history, turn);
+    const planned = applyArm(arm, stable, history, turn, previous);
+    const body = planned.request;
     if (requestDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, requestDelayMs));
     const result = await call(body);
+    if (arm === "candidate" && result.status >= 200 && result.status < 300) {
+      previous = candidatePrefixState(planned, `experiment-${session}`);
+    }
     const u = result.usage ?? {};
     rows.push({
       turn,
