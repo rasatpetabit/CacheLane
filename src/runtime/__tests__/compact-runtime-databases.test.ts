@@ -131,8 +131,13 @@ describe("detached database maintenance worker", () => {
     const stopLines = lines.filter((line) => line.startsWith("systemctl stop"));
 
     expect(result.status).toBe(0);
+    expect(stopLines).toContain("systemctl stop cachelane-healthcheck.timer");
+    expect(stopLines).toContain("systemctl stop cachelane-healthcheck.service");
     expect(stopLines).toContain("systemctl stop cachelane-claude.service");
     expect(stopLines).toContain("systemctl stop cachelane-litellm.service");
+    expect(lines.indexOf("systemctl stop cachelane-healthcheck.service")).toBeLessThan(
+      lines.indexOf("systemctl stop cachelane-claude.service"),
+    );
     expect(
       stopLines.every(
         (line) =>
@@ -180,6 +185,17 @@ describe("detached database maintenance worker", () => {
       "systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot",
     );
     expect(log).toContain(`--setenv=CACHELANE_INSTALL=${installDir}`);
+    expect(log).toContain("--setenv=CACHELANE_SERVICE_USER=ras");
+    expect(log).toContain(
+      `--setenv=CACHELANE_CLAUDE_DB=${harness.env.CACHELANE_CLAUDE_DB}`,
+    );
+    expect(log).toContain(
+      `--setenv=CACHELANE_LITELLM_DB=${harness.env.CACHELANE_LITELLM_DB}`,
+    );
+    expect(log).toContain("--setenv=CACHELANE_NODE_BIN=/usr/bin/node");
+    expect(log).toContain("--setenv=CACHELANE_READY_TIMEOUT_SEC=0");
+    expect(log).not.toContain("--setenv=CACHELANE_SYSTEMCTL_BIN=");
+    expect(log).not.toContain("--setenv=CACHELANE_RUNUSER_BIN=");
     expect(log).toContain(`${installedScript} --worker`);
   });
 });

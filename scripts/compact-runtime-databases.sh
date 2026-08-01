@@ -12,6 +12,7 @@ READY_TIMEOUT_SEC="${CACHELANE_READY_TIMEOUT_SEC:-30}"
 UNIT_NAME="${CACHELANE_MAINTENANCE_UNIT:-cachelane-db-maintenance}"
 CLAUDE_SERVICE=cachelane-claude.service
 LITELLM_SERVICE=cachelane-litellm.service
+HEALTHCHECK_SERVICE=cachelane-healthcheck.service
 TIMER=cachelane-healthcheck.timer
 SERVICE_USER="${CACHELANE_SERVICE_USER:-}"
 CLAUDE_DB="${CACHELANE_CLAUDE_DB:-}"
@@ -117,12 +118,13 @@ run_worker() {
   trap 'exit 143' TERM
 
   "$SYSTEMCTL_BIN" stop "$TIMER"
+  "$SYSTEMCTL_BIN" stop "$HEALTHCHECK_SERVICE"
   run_db_action "$CLAUDE_DB" quick_check
   run_db_action "$LITELLM_DB" quick_check
   maintain_lane "$CLAUDE_SERVICE" 7333 "$CLAUDE_DB"
   maintain_lane "$LITELLM_SERVICE" 7332 "$LITELLM_DB"
   "$SYSTEMCTL_BIN" start "$TIMER"
-  "$SYSTEMCTL_BIN" start cachelane-healthcheck.service
+  "$SYSTEMCTL_BIN" start "$HEALTHCHECK_SERVICE"
 
   trap - EXIT INT TERM
   echo "CacheLane database maintenance completed successfully"
@@ -142,6 +144,11 @@ launch_worker() {
     --wait \
     --property=Type=oneshot \
     --setenv=CACHELANE_INSTALL="$INSTALL" \
+    --setenv=CACHELANE_SERVICE_USER="$SERVICE_USER" \
+    --setenv=CACHELANE_CLAUDE_DB="$CLAUDE_DB" \
+    --setenv=CACHELANE_LITELLM_DB="$LITELLM_DB" \
+    --setenv=CACHELANE_NODE_BIN="$NODE_BIN" \
+    --setenv=CACHELANE_READY_TIMEOUT_SEC="$READY_TIMEOUT_SEC" \
     "$worker" --worker
 }
 
