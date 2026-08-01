@@ -39,6 +39,7 @@ export const DEFAULT_CONFIG: CachelaneConfig = {
     keepalive: true,
     mutation_enabled: true,
     marker_strategy: "prefix_only",
+    elision_mode: "legacy",
   },
   health: {
     fallback_warning_threshold_pct: 5,

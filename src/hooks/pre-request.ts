@@ -13,6 +13,12 @@ import {
   type PruneDecision,
 } from "../pruner/index.js";
 import {
+  DEFAULT_ELISION_POLICY,
+  transformAnthropic,
+  type ElisionDecision,
+  type ElisionPolicy,
+} from "../pruner/transform.js";
+import {
   orchestrate,
   type AnthropicMessagesRequest,
   type CacheStateTracker,
@@ -32,6 +38,25 @@ export interface PreRequestInput {
   block_placements: PromptBlockPlacement[];
   pruner: CachelaneConfig["pruner"];
   marker_strategy?: CachelaneConfig["features"]["marker_strategy"];
+  /**
+   * The features.k_pruner kill switch.
+   *
+   * Historically only the OpenAI path honoured this, so the Anthropic lane
+   * could still elide with k_pruner=false. Both arms check it now: a flag named
+   * for the feature should turn the feature off on every provider.
+   */
+  k_pruner_enabled?: boolean;
+  /**
+   * features.mutation_enabled. When false the caller forwards the client's body
+   * unchanged, so running the stateless transform would do work nobody uses and
+   * — worse — record elided_bytes for content that was never actually removed.
+   * Gate 5 reads that field, so a false positive there is not cosmetic.
+   */
+  mutation_enabled?: boolean;
+  /** Which elision implementation to run. Defaults to the legacy K-pruner. */
+  elision_mode?: CachelaneConfig["features"]["elision_mode"];
+  /** Overrides the stateless arm's policy; ignored under "legacy". */
+  elision_policy?: ElisionPolicy;
   route: "proxy" | "hook" | "other";
   build_sha?: string;
   config_hash?: string;
@@ -42,6 +67,12 @@ export interface PreRequestResult extends MutatedRequest {
   pruned_blocks_count: number;
   prune_decisions: PruneDecision[];
   effective_message_classifications: Classification[];
+  /** Which arm produced this turn. */
+  elision_mode: CachelaneConfig["features"]["elision_mode"];
+  /** Populated only under the stateless arm; measured in bytes, never tokens. */
+  elision_decisions: ElisionDecision[];
+  /** Whether the selected arm actually ran, as opposed to being switched off. */
+  elision_active: boolean;
 }
 
 function fallbackResult(input: PreRequestInput): PreRequestResult {
@@ -55,6 +86,9 @@ function fallbackResult(input: PreRequestInput): PreRequestResult {
     prune_decisions: [],
     effective_message_classifications: input.message_classifications,
     keepalive_pings_since_last_turn: 0,
+    elision_mode: input.elision_mode ?? "legacy",
+    elision_decisions: [],
+    elision_active: false,
   };
 }
 
@@ -179,6 +213,19 @@ function recordExplanation(
         build_sha: input.build_sha ?? process.env.CACHELANE_BUILD_SHA ?? null,
         config_hash: input.config_hash ?? process.env.CACHELANE_CONFIG_HASH ?? null,
         experiment_arm: input.marker_strategy ?? "prod",
+        elision_mode: result.elision_mode,
+        elision_active: result.elision_active,
+        // Omitted, not zeroed, under the legacy arm: it reports token counts
+        // rather than bytes, and a recorded 0 would read as "elided nothing"
+        // instead of "not measured here".
+        ...(result.elision_mode === "stateless"
+          ? {
+              elided_bytes: result.elision_decisions.reduce(
+                (sum, d) => sum + Math.max(d.original_bytes - d.stub_bytes, 0),
+                0,
+              ),
+            }
+          : {}),
         route: input.route,
         marker_owner: markerOwner(input, result),
         outcome: result.signals.includes("error:fallback") ? "fallback" : "ok",
@@ -207,6 +254,76 @@ function recordAndReturnFallback(input: PreRequestInput): PreRequestResult {
   return result;
 }
 
+/** Both kill switches, checked identically by both arms and both providers. */
+function elisionDisabled(input: PreRequestInput): boolean {
+  return input.pruner.enabled === false || input.k_pruner_enabled === false;
+}
+
+/**
+ * The stateless arm additionally stands down when mutation is off.
+ *
+ * Deliberately not applied to the legacy arm: that path writes is_stub to the
+ * database as a side effect, and today it does so even in the baseline (no
+ * mutation) configuration. Changing that is a separate behavioural question
+ * from this one.
+ */
+function statelessElisionDisabled(input: PreRequestInput): boolean {
+  return elisionDisabled(input) || input.mutation_enabled === false;
+}
+
+/**
+ * The stateless arm. Same contract as the legacy path — same orchestration,
+ * same explanation record — differing only in how the elision set is decided.
+ * Keeping the two behind one function signature is what lets Gate 5 vary the
+ * implementation as the sole factor.
+ */
+function handleStateless(input: PreRequestInput): PreRequestResult {
+  const policy: ElisionPolicy = input.elision_policy ?? {
+    ...DEFAULT_ELISION_POLICY,
+    k: input.pruner.k,
+  };
+
+  const active = !statelessElisionDisabled(input);
+  const elided = !active
+    ? { body: input.original_request, decisions: [] as ElisionDecision[] }
+    : transformAnthropic(input.original_request, policy);
+
+  const effectiveClassifications = applyOneTurnSuffixWarming(input);
+  const orchestrated = orchestrate(
+    {
+      workspace_id: input.workspace_id,
+      session_id: input.session_id,
+      current_turn: input.current_turn,
+      message_classifications: effectiveClassifications,
+      original_request: elided.body,
+    },
+    input.tracker,
+    DEFAULT_CONFIG.keepalive,
+    input.marker_strategy ?? "prefix_only",
+  );
+
+  const result: PreRequestResult = {
+    ...orchestrated,
+    // orchestrate() reports whether IT placed cache breakpoints. Eliding also
+    // makes the forwarded body differ from the client's, and the caller
+    // forwards the original whenever `mutated` is false — so without this, an
+    // elision on a request with no system/tools blocks is computed, recorded as
+    // bytes saved, and then thrown away before it reaches the wire.
+    mutated: orchestrated.mutated || elided.decisions.length > 0,
+    pruned_blocks_count: elided.decisions.length,
+    // Empty by design: PruneDecision carries token counts, and the only token
+    // numbers available here would be invented. The byte-accurate record lives
+    // in elision_decisions.
+    prune_decisions: [],
+    effective_message_classifications: effectiveClassifications,
+    elision_mode: "stateless",
+    elision_decisions: elided.decisions,
+    elision_active: active,
+  };
+  recordExplanation(input, result);
+  return result;
+}
+
 export function handlePreRequest(input: PreRequestInput): PreRequestResult {
   try {
     if (
@@ -226,12 +343,21 @@ export function handlePreRequest(input: PreRequestInput): PreRequestResult {
       return recordAndReturnFallback(input);
     }
 
+    // The stateless arm short-circuits the whole database-backed decision path:
+    // no getPrunableBlocks, no markStubs, no placements. Eligibility comes from
+    // the messages array alone, so there is nothing to look up and nothing to
+    // write back — which is the point, since the write-back is what made the
+    // old path cost 45 ms per block and un-elide behind its own back.
+    if ((input.elision_mode ?? "legacy") === "stateless") {
+      return handleStateless(input);
+    }
+
     const pruneResult = pruneExpiredBlocks(input.db, {
       workspace_id: input.workspace_id,
       session_id: input.session_id,
       k: input.pruner.k,
       current_turn: input.current_turn,
-      enabled: input.pruner.enabled,
+      enabled: !elisionDisabled(input),
       now_ms: input.now_ms,
     });
 
@@ -283,12 +409,18 @@ export function handlePreRequest(input: PreRequestInput): PreRequestResult {
 
     const result = {
       ...orchestrated,
+      // Same reasoning as the stateless arm: stubs that the caller does not
+      // forward are stubs that did nothing.
+      mutated: orchestrated.mutated || actionableDecisions.length > 0,
       // Only count blocks that were actually materialized (had a placement).
       // Blocks marked as stubs in the DB but absent from the request are
       // already gone from context; they don't reduce the forwarded request.
       pruned_blocks_count: actionableDecisions.length,
       prune_decisions: actionableDecisions,
       effective_message_classifications: effectiveClassifications,
+      elision_mode: "legacy" as const,
+      elision_decisions: [],
+      elision_active: !elisionDisabled(input),
     };
     recordExplanation(input, result);
     return result;

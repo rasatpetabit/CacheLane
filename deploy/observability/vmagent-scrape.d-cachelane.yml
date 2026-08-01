@@ -1,0 +1,43 @@
+#
+# cachelane.yml — CacheLane proxy scrape fragment.
+#
+# Install to: /etc/vmagent/scrape.d/cachelane.yml
+# Source of truth: the observability repo's vmagent role
+# (/srv/dev/petabit/sysadmin/observability/vmagent/scrape.d/). Copying this
+# straight to /etc works until the next Ansible run overwrites it — see the
+# README in this directory.
+#
+# Schema: top-level YAML list of Prometheus scrape_config objects, picked up by
+# vmagent's scrape_config_files glob (/etc/vmagent/scrape.d/*.yml). Do not add
+# targets to the shared vmagent.yml.
+#
+# Label scheme copied from litellm.yml: instance is the host, service names the
+# unit, domain groups it with the rest of the LLM plumbing.
+#
+# Two lanes, two units, two separate CACHELANE_HOME data directories. They are
+# scraped as distinct targets because they fail independently — the LiteLLM lane
+# is the one that carries the pruning-heavy traffic, and its numbers should
+# never be averaged with the Claude lane's.
+#
+# No trailing slash needed: CacheLane serves /metrics directly, no redirect.
+
+- job_name: cachelane
+  scheme: http
+  metrics_path: /metrics
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  static_configs:
+    - targets:
+        - '127.0.0.1:7332'
+      labels:
+        instance: epyc2
+        service: cachelane
+        lane: litellm
+        domain: llm
+    - targets:
+        - '127.0.0.1:7333'
+      labels:
+        instance: epyc2
+        service: cachelane
+        lane: claude
+        domain: llm

@@ -95,6 +95,17 @@ export interface CachelaneConfig {
     keepalive: boolean;
     mutation_enabled: boolean;
     marker_strategy: "passthrough" | "prefix_only" | "candidate";
+    /**
+     * Which elision implementation to use.
+     *
+     * "legacy": the database-backed K-pruner (getPrunableBlocks / is_stub).
+     * "stateless": the pure transform in src/pruner/transform.ts.
+     *
+     * Defaults to "legacy" so this lands dark. The stateless arm is switched on
+     * per lane for the Gate 5 measurement, and only becomes the default if that
+     * measurement shows a >=10% reduction in price-weighted cost.
+     */
+    elision_mode: "legacy" | "stateless";
   };
   health: {
     fallback_warning_threshold_pct: number;

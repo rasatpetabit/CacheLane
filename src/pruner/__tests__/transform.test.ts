@@ -262,6 +262,35 @@ describe("eligibility", () => {
     expect(transformAnthropic(request).decisions.length).toBeGreaterThan(0);
   });
 
+  it("elides a tool_result whose content is a block array, not just a string", () => {
+    // Claude Code sends both shapes. The array form is the one that carries
+    // large file reads, so missing it would mean eliding almost nothing.
+    const request: AnthropicTransformable = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_array",
+              content: [{ type: "text", text: BIG }],
+            },
+          ],
+        },
+        ...anthropicConversation(40).messages,
+      ],
+    };
+    const { body, decisions } = transformAnthropic(request);
+    const elided = decisions.find((d) => d.block_id === "toolu_array");
+    expect(elided).toBeDefined();
+    expect(elided!.original_bytes).toBeGreaterThan(8000);
+
+    // Replaced by a plain string, which the API accepts for tool_result content.
+    const item = (body.messages[0]!.content as { content?: unknown }[])[0]!;
+    expect(typeof item.content).toBe("string");
+    expect(String(item.content)).toContain("cachelane:elided");
+  });
+
   it("skips tool_result blocks with no tool_use_id rather than eliding them anonymously", () => {
     const request: AnthropicTransformable = {
       messages: [

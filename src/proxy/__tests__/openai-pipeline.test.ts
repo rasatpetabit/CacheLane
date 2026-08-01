@@ -267,3 +267,167 @@ describe("openai pipeline — forwarded request", () => {
     expect(lastCaptured?.headers["authorization"]).toBe("Bearer sk-test-key");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Integration: the stateless elision arm on the OpenAI path
+// ---------------------------------------------------------------------------
+
+/**
+ * The OpenAI branch has its own elision code path, separate from
+ * handlePreRequest. It gets its own end-to-end coverage: the arm is selected
+ * from config, the transformed body is what actually reaches the upstream, and
+ * both kill switches still work.
+ */
+describe("openai pipeline — stateless elision arm", () => {
+  const BIG = "z".repeat(8000);
+  let armTmp: string;
+  let armProxy: http.Server;
+  let armPort: number;
+
+  /** An OpenAI conversation deep enough for elision to fire. */
+  function toolConversation(turns: number): Record<string, unknown> {
+    const messages: Record<string, unknown>[] = [
+      { role: "system", content: "You are a helpful assistant." },
+    ];
+    for (let t = 0; t < turns; t++) {
+      messages.push({ role: "user", content: `turn ${t}` });
+      messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: `call_${t}`,
+            type: "function",
+            function: { name: "get_weather", arguments: "{}" },
+          },
+        ],
+      });
+      messages.push({ role: "tool", tool_call_id: `call_${t}`, content: BIG });
+    }
+    return { model: "gpt-4o", messages };
+  }
+
+  async function startWithFeatures(features: Record<string, unknown>): Promise<void> {
+    armTmp = fs.mkdtempSync(path.join(os.tmpdir(), "cachelane-openai-arm-"));
+    const configPath = path.join(armTmp, "config.json");
+    const base = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "config.json"), "utf-8"),
+    ) as { features: Record<string, unknown> };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ ...base, features: { ...base.features, ...features } }),
+    );
+
+    lastCaptured = null;
+    armProxy = startProxy({
+      port: 0,
+      db_path: path.join(armTmp, "arm.db"),
+      config_path: configPath,
+      workspace_id: "test-ws",
+      session_id: "arm-session",
+      upstream: { host: "127.0.0.1", port: fakeUpstreamPort, ssl: false },
+    });
+    armPort = await waitForServer(armProxy);
+  }
+
+  afterEach(async () => {
+    if (armProxy) await closeServer(armProxy);
+    if (armTmp) fs.rmSync(armTmp, { recursive: true, force: true });
+  });
+
+  /** Tool messages in the forwarded body whose content was replaced by a stub. */
+  function forwardedStubCount(): number {
+    const forwarded = JSON.parse(lastCaptured!.body) as {
+      messages: { role: string; content?: unknown }[];
+    };
+    return forwarded.messages.filter(
+      (m) => m.role === "tool" && String(m.content).includes("cachelane:elided"),
+    ).length;
+  }
+
+  it("elides tool output in the body that actually reaches the upstream", async () => {
+    await startWithFeatures({ elision_mode: "stateless", mutation_enabled: true });
+    await postChat(armPort, JSON.stringify(toolConversation(20)));
+
+    expect(lastCaptured).not.toBeNull();
+    expect(forwardedStubCount()).toBeGreaterThan(0);
+    // The pairing invariant survives: one tool message per tool_calls id.
+    const forwarded = JSON.parse(lastCaptured!.body) as {
+      messages: { role: string; tool_call_id?: string }[];
+    };
+    expect(forwarded.messages.filter((m) => m.role === "tool")).toHaveLength(20);
+  });
+
+  it("forwards nothing elided under the legacy arm with an empty block table", async () => {
+    // The discriminator: legacy decides from the DB, which has no rows here.
+    await startWithFeatures({ elision_mode: "legacy", mutation_enabled: true });
+    await postChat(armPort, JSON.stringify(toolConversation(20)));
+
+    expect(lastCaptured).not.toBeNull();
+    expect(forwardedStubCount()).toBe(0);
+  });
+
+  it("honours the k_pruner kill switch", async () => {
+    await startWithFeatures({
+      elision_mode: "stateless",
+      mutation_enabled: true,
+      k_pruner: false,
+    });
+    await postChat(armPort, JSON.stringify(toolConversation(20)));
+
+    expect(lastCaptured).not.toBeNull();
+    expect(forwardedStubCount()).toBe(0);
+    expect(lastCaptured!.body).toContain(BIG);
+  });
+
+  it("forwards the client's body untouched when mutation is disabled", async () => {
+    // Checking only that BIG survives is not enough: elision keeps the most
+    // recent tool outputs, so a body with the old ones stubbed still contains
+    // BIG. Assert zero stubs, and that every tool message is byte-identical.
+    await startWithFeatures({ elision_mode: "stateless", mutation_enabled: false });
+    const sent = toolConversation(20);
+    await postChat(armPort, JSON.stringify(sent));
+
+    expect(lastCaptured).not.toBeNull();
+    expect(forwardedStubCount()).toBe(0);
+
+    const forwarded = JSON.parse(lastCaptured!.body) as {
+      messages: { role: string; content?: unknown }[];
+    };
+    const toolContents = (m: { messages: { role: string; content?: unknown }[] }) =>
+      m.messages.filter((x) => x.role === "tool").map((x) => x.content);
+    expect(toolContents(forwarded)).toEqual(
+      toolContents(sent as { messages: { role: string; content?: unknown }[] }),
+    );
+  });
+
+  it("does not claim elided bytes for a body it forwarded intact", async () => {
+    // elided_bytes is what Gate 5 measures the feature by. Reporting bytes
+    // removed while sending the original is worse than reporting nothing.
+    await startWithFeatures({ elision_mode: "stateless", mutation_enabled: false });
+    await postChat(armPort, JSON.stringify(toolConversation(20)));
+
+    const db = new Database(path.join(armTmp, "arm.db"), { readonly: true });
+    try {
+      const rows = db
+        .prepare("SELECT provenance_json FROM turn_explanations")
+        .all() as { provenance_json: string | null }[];
+      // Without this the whole assertion passes on an empty table.
+      expect(rows.length).toBeGreaterThan(0);
+
+      for (const row of rows) {
+        const provenance = JSON.parse(row.provenance_json ?? "{}") as {
+          elided_bytes?: number;
+          elision_mode?: string;
+        };
+        expect(provenance.elided_bytes ?? 0).toBe(0);
+        // Mutation-off IS the Gate 5 control lane. It must still be recorded as
+        // the stateless arm — labelling it "legacy" would compare
+        // stateless-on against legacy-off and call the difference an effect.
+        expect(provenance.elision_mode).toBe("stateless");
+      }
+    } finally {
+      db.close();
+    }
+  });
+});

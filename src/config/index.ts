@@ -48,6 +48,16 @@ const configSchema = z.object({
       marker_strategy: z
         .enum(["passthrough", "prefix_only", "candidate"])
         .default("prefix_only"),
+      // Defaulted, not required: zod strips unknown keys, so without an entry
+      // here the field would be undefined at runtime no matter what the file
+      // said — the experiment arm would be unsettable from config.
+      //
+      // .catch() as well as .default(): a bare enum makes an invalid value fail
+      // the WHOLE parse, and loadConfig's error path then replaces the entire
+      // config with DEFAULT_CONFIG. On a production file that deliberately has
+      // mutation_enabled, k_pruner and pruner.enabled set to false, one typo
+      // here would silently turn all three back on. Contain the bad value.
+      elision_mode: z.enum(["legacy", "stateless"]).default("legacy").catch("legacy"),
     })
     .default(DEFAULT_CONFIG.features),
   health: z
@@ -156,11 +166,36 @@ export function loadConfig(configPath: string): CachelaneConfig {
   } catch (err) {
     if (!(err instanceof z.ZodError)) throw err;
     console.warn(
-      `[cachelane] config at ${configPath} failed validation — falling back to defaults`,
+      `[cachelane] config at ${configPath} failed validation — falling back to SAFE defaults`,
       err.message,
     );
-    return { ...DEFAULT_CONFIG };
+    return safeFallbackConfig();
   }
+}
+
+/**
+ * The fallback used when a config file cannot be validated.
+ *
+ * Returning plain DEFAULT_CONFIG here is how a single unparseable field turns
+ * into an incident: the defaults enable mutation, k_pruner and the pruner, so a
+ * config that deliberately disabled all three — which is exactly how production
+ * is currently held safe — would silently have them switched back on by a typo.
+ *
+ * A configuration we could not understand is not a mandate to start rewriting
+ * requests. Everything else falls back to defaults; the switches that change
+ * what gets sent upstream fall back to off.
+ */
+function safeFallbackConfig(): CachelaneConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    pruner: { ...DEFAULT_CONFIG.pruner, enabled: false },
+    features: {
+      ...DEFAULT_CONFIG.features,
+      k_pruner: false,
+      mutation_enabled: false,
+      elision_mode: "legacy",
+    },
+  };
 }
 
 // The fallback workspace id MUST be cwd-independent. The proxy runs inside the

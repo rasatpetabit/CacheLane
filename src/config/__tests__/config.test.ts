@@ -16,6 +16,107 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+describe("loadConfig — elision arm", () => {
+  /**
+   * The zod schema strips unknown keys, so a field the schema does not name is
+   * silently dropped no matter what the file says. A production config.json
+   * predates elision_mode, and without a schema entry the experiment arm could
+   * never be switched on at all.
+   *
+   * Both fixtures are complete, valid configs. A partial one makes zod throw,
+   * and loadConfig then falls back to DEFAULT_CONFIG — which would make the
+   * "defaults to legacy" assertion pass without the schema entry existing.
+   */
+  function writeConfig(features: Record<string, unknown>): string {
+    const configPath = path.join(tmpDir, "config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...DEFAULT_CONFIG,
+        features: { ...DEFAULT_CONFIG.features, ...features },
+      }),
+    );
+    return configPath;
+  }
+
+  it("defaults elision_mode to legacy for a config file written before it existed", () => {
+    const withoutArm: Record<string, unknown> = { ...DEFAULT_CONFIG.features };
+    delete withoutArm.elision_mode;
+    const configPath = path.join(tmpDir, "config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...DEFAULT_CONFIG,
+        pruner: { ...DEFAULT_CONFIG.pruner, k: 9 },
+        features: withoutArm,
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    expect(config.features.elision_mode).toBe("legacy");
+    // Proof the file parsed rather than falling back wholesale to defaults.
+    // Must be a NON-default value: comparing against the default would hold
+    // either way, so it would not distinguish parsing from the fallback.
+    expect(DEFAULT_CONFIG.pruner.k).not.toBe(9);
+    expect(config.pruner.k).toBe(9);
+  });
+
+  it("actually reads the stateless arm out of the file", () => {
+    const config = loadConfig(writeConfig({ elision_mode: "stateless" }));
+    expect(config.features.elision_mode).toBe("stateless");
+  });
+
+  it("contains an unknown arm instead of resetting the whole config", () => {
+    // This is the dangerous one. A bare enum makes an invalid value fail the
+    // ENTIRE zod parse, and loadConfig's error path then replaces the whole
+    // config. Against a production file that deliberately disables mutation,
+    // k_pruner and the pruner, one typo would silently switch all three back
+    // on — a config typo escalating straight into the outage this work fixed.
+    const configPath = path.join(tmpDir, "config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...DEFAULT_CONFIG,
+        pruner: { ...DEFAULT_CONFIG.pruner, enabled: false },
+        features: {
+          ...DEFAULT_CONFIG.features,
+          k_pruner: false,
+          mutation_enabled: false,
+          elision_mode: "statless", // the typo
+        },
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    expect(config.features.elision_mode).toBe("legacy");
+    // Every other setting must survive untouched.
+    expect(config.features.mutation_enabled).toBe(false);
+    expect(config.features.k_pruner).toBe(false);
+    expect(config.pruner.enabled).toBe(false);
+  });
+
+  it("falls back with mutation OFF when the config cannot be validated at all", () => {
+    // Some other field is unparseable, so the whole file is rejected and there
+    // is nothing to preserve. Defaulting to DEFAULT_CONFIG would start
+    // rewriting requests on the strength of a file we could not read.
+    const configPath = path.join(tmpDir, "config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...DEFAULT_CONFIG,
+        pruner: { enabled: false, k: 999, mode: "default" }, // k is out of range
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    expect(config.features.mutation_enabled).toBe(false);
+    expect(config.features.k_pruner).toBe(false);
+    expect(config.pruner.enabled).toBe(false);
+    // Non-safety settings still come from the defaults.
+    expect(config.proxy.upstream_host).toBe(DEFAULT_CONFIG.proxy.upstream_host);
+  });
+});
+
 describe("loadConfig", () => {
   it("creates config with defaults when file does not exist", () => {
     const configPath = path.join(tmpDir, "config.json");

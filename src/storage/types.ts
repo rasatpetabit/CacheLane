@@ -280,6 +280,35 @@ export interface TurnMeasurementProvenance {
   build_sha: string | null;
   config_hash: string | null;
   experiment_arm: "passthrough" | "prefix_only" | "candidate" | "prod";
+  /**
+   * Which elision implementation produced this turn. Gate 5 splits on it: the
+   * feature's value has to be measured on one lane with mutation as the sole
+   * varying factor, so every turn must say which arm it belongs to. Optional
+   * because turns recorded before the stateless arm existed do not carry it.
+   */
+  elision_mode?: "legacy" | "stateless";
+  /**
+   * Bytes removed from the forwarded body, summed over elided blocks.
+   *
+   * Deliberately bytes, not tokens. `prune_transforms` reports token counts
+   * that became self-referential once markStubs overwrote blocks.token_count
+   * with stub sizes — after the first prune it compares stub against stub, so
+   * any savings figure derived from it is invented. Bytes are measured on the
+   * spot from the request itself and cannot drift that way.
+   */
+  elided_bytes?: number;
+  /**
+   * Whether the selected arm actually ran its transform this turn.
+   *
+   * `elision_mode` records which implementation was configured, deliberately
+   * including turns where a kill switch stood it down — otherwise Gate 5's own
+   * control lane (stateless selected, mutation off) would be filed under
+   * "legacy" and the experiment would compare the wrong two things.
+   *
+   * That leaves "ran and saved nothing" indistinguishable from "never ran",
+   * which are very different data points. This separates them.
+   */
+  elision_active?: boolean;
   route: "proxy" | "hook" | "other";
   marker_owner?: "client" | "cachelane" | "mixed";
   outcome: "ok" | "fallback" | "error";

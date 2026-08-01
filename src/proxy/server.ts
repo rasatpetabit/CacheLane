@@ -15,6 +15,7 @@ import { CacheStateTracker } from "../orchestrator/index.js";
 import { logger } from "../logger/index.js";
 import { ProxyMetrics } from "./metrics.js";
 import { asForwardBody, asOriginalBody, type ForwardBody, type OriginalBody } from "./body-types.js";
+import { DEFAULT_ELISION_POLICY, transformOpenAI } from "../pruner/transform.js";
 import { selectAdapter } from "../providers/registry.js";
 import type { ProviderAdapter } from "../providers/types.js";
 import type { AnthropicMessagesRequest, AnthropicMessage } from "../orchestrator/index.js";
@@ -811,7 +812,49 @@ export function createProxyServer(
           let prunedDecisions: import("../pruner/index.js").PruneDecision[] = [];
           let oaiPlacements: import("../pruner/index.js").PromptBlockPlacement[] = [];
           let pruneFailed = false;
-          if (config.features.k_pruner) {
+          let elidedBytes = 0;
+          let elisionActive = false;
+          // Which implementation runs — nothing else. Folding mutation_enabled
+          // in here would drop the mutation-off case through to the legacy
+          // branch, running legacy DB pruning and labelling the turn "legacy".
+          // That case IS the Gate 5 control lane, and mislabelling it would
+          // silently compare stateless-on against legacy-off.
+          const statelessArm = config.features.elision_mode === "stateless";
+          if (config.features.k_pruner && statelessArm) {
+            // The stateless arm needs no placements and no DB lookup: the
+            // messages array is the whole input. Fail-open like the legacy
+            // branch below — a transform error forwards the request unelided.
+            try {
+              // Whether to actually elide is a separate question from which
+              // implementation is selected. With mutation off the original body
+              // is forwarded regardless, so eliding would only produce
+              // elided_bytes for bytes still on the wire — and Gate 5 reads it.
+              if (config.pruner.enabled !== false && config.features.mutation_enabled) {
+                const elided = transformOpenAI(oaiRequest, {
+                  ...DEFAULT_ELISION_POLICY,
+                  k: config.pruner.k,
+                });
+                requestForHints = elided.body;
+                prunedCount = elided.decisions.length;
+                elidedBytes = elided.decisions.reduce(
+                  (sum, d) => sum + Math.max(d.original_bytes - d.stub_bytes, 0),
+                  0,
+                );
+                elisionActive = true;
+              }
+            } catch (err) {
+              logger.error(
+                "openai stateless elision failed — forwarding unelided",
+                err instanceof Error ? err.message : String(err),
+                err,
+              );
+              requestForHints = oaiRequest;
+              prunedCount = 0;
+              elidedBytes = 0;
+              elisionActive = false;
+              pruneFailed = true;
+            }
+          } else if (config.features.k_pruner) {
             try {
               oaiPlacements = computeBlockPlacementsOpenAI(
                 oaiRequest.messages,
@@ -928,6 +971,13 @@ export function createProxyServer(
                   build_sha: buildSha ?? null,
                   config_hash: configHash ?? null,
                   experiment_arm: "prod",
+                  elision_mode: statelessArm ? "stateless" : "legacy",
+                  ...(statelessArm ? { elided_bytes: elidedBytes } : {}),
+                  // Distinguishes "the arm ran and saved nothing" from "the arm
+                  // never ran"; Gate 5 must not average the second into the first.
+                  elision_active: statelessArm
+                    ? elisionActive
+                    : config.features.k_pruner && config.pruner.enabled !== false,
                   route: "proxy",
                   outcome: pruneFailed ? "fallback" : "ok",
                   usage_missing: true,
@@ -1040,6 +1090,9 @@ export function createProxyServer(
           ),
           pruner: config.pruner,
           marker_strategy: config.features.marker_strategy,
+          elision_mode: config.features.elision_mode,
+          k_pruner_enabled: config.features.k_pruner,
+          mutation_enabled: config.features.mutation_enabled,
           route: "proxy",
           build_sha: buildSha,
           config_hash: configHash,

@@ -1,0 +1,237 @@
+---
+# cachelane.yml — CacheLane proxy health rules.
+#
+# Install to: /etc/vmalert/rules/cachelane.yml (see the README in this directory
+# for why that should go through the observability repo's vmalert role).
+#
+# Metrics source: CacheLane's own /metrics endpoint on :7332 and :7333, scraped
+# under job_name: cachelane with service=cachelane and domain=llm.
+#
+# Label conventions (align with the Alertmanager route fragments):
+#   severity: critical | warning | info
+#   service:  cachelane
+#   domain:   llm
+#
+# ---------------------------------------------------------------------------
+# A deliberate substitution, worth reading before tuning these.
+#
+# The remediation spec asked for an alert on "overhead p99 > 250 ms". CacheLane
+# exports no overhead metric: cachelane_request_duration_seconds is END-TO-END
+# and therefore dominated by how long the model took to answer. Alerting on it
+# would page on a slow model, not a slow proxy — and it would contradict that
+# same spec's own evidence standard, which says in as many words not to accept
+# end-to-end latency as evidence, because LiteLLM's p50 swings between 1.3 s and
+# 180 s on upstream variance alone.
+#
+# cachelane_event_loop_lag_seconds is the signal that was actually wanted. The
+# outage was a synchronous stall on the request path — a tokenizer rebuilt per
+# elided block, 45 ms each — and event-loop lag is its direct signature. It is
+# also immune to upstream slowness: waiting on a socket does not block the loop.
+# So the latency alert below is on lag, at the 250 ms threshold the spec named.
+# ---------------------------------------------------------------------------
+
+groups:
+  # --------------------------------------------------------------------------
+  # Availability
+  # --------------------------------------------------------------------------
+  - name: cachelane.availability
+    interval: 1m
+    rules:
+      - alert: CacheLaneProxyDown
+        expr: |
+          up{job="cachelane",service="cachelane",domain="llm"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} lane on {{ $labels.instance }} is not scrapeable
+          description: >-
+            The CacheLane {{ $labels.lane }} proxy has not answered /metrics for
+            more than 3 minutes. Clients are configured to talk to it directly,
+            so this is a client-visible outage rather than a degraded path.
+            Check `systemctl status cachelane-{{ $labels.lane }}` and
+            `journalctl -u cachelane-{{ $labels.lane }} -n 100`.
+
+      # `up == 0` only matches a series that EXISTS. If the scrape fragment is
+      # removed — an Ansible run overwriting /etc/vmagent/scrape.d, say, which
+      # is the specific risk called out in this directory's README — the series
+      # disappears and the alert above goes quiet rather than firing. Silence
+      # then reads identically to health. absent() is what covers that, and it
+      # has to name each lane, because absent() over a selector matching one
+      # live lane returns nothing even if the other is gone.
+      - alert: CacheLaneScrapeConfigMissing
+        expr: |
+          absent(up{job="cachelane",lane="litellm"})
+          or absent(up{job="cachelane",lane="claude"})
+        for: 10m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane is no longer being scraped on at least one lane
+          description: >-
+            No `up` series exists for one of the CacheLane lanes, which means
+            vmagent is not scraping it at all rather than that it is down. The
+            usual cause is the scrape fragment being removed from
+            /etc/vmagent/scrape.d — see deploy/observability/README.md in the
+            cachelane repo. Every other alert in this file is silent while this
+            one is firing.
+
+  # --------------------------------------------------------------------------
+  # The failure this monitoring exists for
+  # --------------------------------------------------------------------------
+  - name: cachelane.latency
+    interval: 1m
+    rules:
+      # The direct signature of a synchronous stall on the request path. The
+      # known-bad reading during the incident was multi-second; healthy is
+      # sub-millisecond, so 250 ms is far above noise and far below broken.
+      - alert: CacheLaneEventLoopStalled
+        expr: |
+          cachelane_event_loop_lag_seconds{job="cachelane",quantile="0.99"} > 0.25
+        for: 5m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} event loop p99 lag is {{ $value | humanizeDuration }}
+          description: >-
+            The event loop on the {{ $labels.lane }} lane is blocking for more
+            than 250 ms at p99. CacheLane is single-threaded, so this is time no
+            request on that lane can make progress — it is the signature of
+            per-request synchronous work, not of a slow upstream. Check whether
+            elision is enabled (`features.elision_mode`, `pruner.enabled`) and
+            what changed on the request path.
+
+      # Multi-second lag is the incident itself, not a warning about one.
+      - alert: CacheLaneEventLoopBlocked
+        expr: |
+          cachelane_event_loop_lag_seconds_max{job="cachelane"} > 3
+        for: 2m
+        labels:
+          severity: critical
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} blocked the event loop for {{ $value | humanizeDuration }}
+          description: >-
+            A single synchronous operation stalled the {{ $labels.lane }} lane
+            for over 3 seconds. During the July 2026 incident this reached
+            6.7 seconds at the median for turns eliding 120+ blocks. Requests in
+            flight are stalled for the whole duration. Consider disabling
+            elision (`pruner.enabled: false`) to restore service, then diagnose.
+
+  # --------------------------------------------------------------------------
+  # Saturation
+  # --------------------------------------------------------------------------
+  - name: cachelane.saturation
+    interval: 1m
+    rules:
+      # MAX_INFLIGHT_REQUESTS is 16 and the proxy sheds with 503 at that point,
+      # so cachelane_inflight can reach 16 but never exceed it. The spec's
+      # original "inflight > 32" was written against an earlier 64-request cap
+      # and would be an alert that can never fire. 12 is 75% of the real cap:
+      # sustained pressure that close to shedding is the thing worth knowing.
+      - alert: CacheLaneInflightHigh
+        expr: |
+          cachelane_inflight{job="cachelane"} > 12
+        for: 5m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} has {{ $value }} requests in flight
+          description: >-
+            Sustained in-flight depth above 12 of a 16-request cap on the
+            {{ $labels.lane }} lane — close enough to the cap that shedding is
+            imminent if it has not already begun.
+            Cross-check cachelane_event_loop_lag_seconds: if lag is also high the
+            proxy is the bottleneck, and if it is not, the upstream is slow and
+            requests are simply accumulating.
+
+      - alert: CacheLaneSheddingLoad
+        expr: |
+          rate(cachelane_shed_total{job="cachelane"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} is shedding requests with 503
+          description: >-
+            The admission cap is rejecting requests on the {{ $labels.lane }}
+            lane. Shedding is the designed behaviour under overload rather than
+            a fault, but it is client-visible: callers are getting 503s.
+
+      # MemoryMax is 536870912 bytes — 512 MiB, not 512 MB. The threshold is
+      # 400 MiB, which is 78% of the real limit; 400e6 would have been 74.5%
+      # and the comment describing it as 78% would have been wrong.
+      - alert: CacheLaneMemoryHigh
+        expr: |
+          cachelane_process_resident_bytes{job="cachelane"} > 419430400
+        for: 10m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} RSS is {{ $value | humanize1024 }}B
+          description: >-
+            Resident memory on the {{ $labels.lane }} lane is within 25% of the
+            unit's 512 MB MemoryMax. Exceeding it means the cgroup OOM killer
+            restarts the proxy and drops every in-flight request. Buffered
+            request and response bodies are the usual driver.
+
+  # --------------------------------------------------------------------------
+  # Upstream health
+  # --------------------------------------------------------------------------
+  - name: cachelane.upstream
+    interval: 1m
+    rules:
+      - alert: CacheLaneUpstreamErrors
+        expr: |
+          rate(cachelane_upstream_errors_total{job="cachelane"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} upstream {{ $labels.kind }} errors
+          description: >-
+            The {{ $labels.lane }} lane is seeing sustained upstream
+            {{ $labels.kind }} failures. kind=timeout means the upstream
+            accepted the request and then went quiet past the inactivity
+            timeout; kind=error means the connection itself failed.
+
+      - alert: CacheLaneAbortedRequests
+        expr: |
+          rate(cachelane_requests_total{job="cachelane",status="aborted"}[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: info
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane {{ $labels.lane }} is seeing aborted requests
+          description: >-
+            Requests on the {{ $labels.lane }} lane are ending without a
+            complete response — the client disconnected or the stream was cut.
+            A steady trickle is normal for interactive agent use; a sustained
+            rise alongside event-loop lag means clients are timing out on the
+            proxy rather than choosing to stop.

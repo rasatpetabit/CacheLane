@@ -316,3 +316,260 @@ describe("handlePreRequest", () => {
     expect(spy).toHaveBeenCalled();
   });
 });
+
+/**
+ * The stateless arm (features.elision_mode = "stateless").
+ *
+ * The legacy path decided what to elide by querying the database and writing
+ * `is_stub` back. That write-back is what made it cost 45 ms per block per turn
+ * and, separately, what made elision silently stop after the first turn per
+ * block once the un-stubbing bug was removed. These tests pin the two
+ * properties that combination made impossible.
+ */
+describe("handlePreRequest — stateless elision arm", () => {
+  const BIG = "y".repeat(8000);
+
+  /**
+   * A valid Anthropic tool-use conversation.
+   *
+   * Every tool_result is paired with a tool_use in the immediately preceding
+   * assistant message. An orphaned tool_result is rejected by the API, so a
+   * fixture built that way would never be forwardable and the tests would be
+   * exercising a shape production never sends.
+   */
+  function conversation(turns: number): AnthropicMessagesRequest {
+    const messages: AnthropicMessagesRequest["messages"] = [];
+    for (let t = 0; t < turns; t++) {
+      messages.push({ role: "user", content: [{ type: "text", text: `ask ${t}` }] });
+      messages.push({
+        role: "assistant",
+        content: [{ type: "tool_use", id: `toolu_${t}`, name: "Read", input: {} }],
+      });
+      messages.push({
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: `toolu_${t}`, content: BIG }],
+      });
+    }
+    return {
+      model: "claude-opus-4-7",
+      system: [{ type: "text", text: "You are Claude." }],
+      tools: [{ name: "Read", input_schema: { type: "object" } }],
+      messages,
+      max_tokens: 1024,
+    } as AnthropicMessagesRequest;
+  }
+
+  function run(request: AnthropicMessagesRequest, turn: number) {
+    return handlePreRequest({
+      db,
+      route: "other",
+      tracker: new CacheStateTracker(),
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      current_turn: turn,
+      original_request: request,
+      message_classifications: request.messages.map(() => cl("VOLATILE")),
+      block_placements: [],
+      pruner: { enabled: true, k: 4, mode: "default" },
+      elision_mode: "stateless",
+      now_ms: 1_715_000_004_000,
+    });
+  }
+
+  it("elides without any block ever having been inserted in the database", () => {
+    // The legacy path can only elide what getPrunableBlocks returns, so with an
+    // empty blocks table it elides nothing. Deciding from the request alone is
+    // the whole difference.
+    const result = run(conversation(20), 20);
+
+    expect(result.pruned_blocks_count).toBeGreaterThan(0);
+    expect(result.elision_mode).toBe("stateless");
+    expect(result.elision_active).toBe(true);
+    expect(db.getBlocksBySession("ws-1", "sess-1")).toHaveLength(0);
+  });
+
+  it("does not mark stubs, so nothing accumulates state to un-stub later", () => {
+    insertBlock("toolu_0", { unused_turns: 9 });
+    run(conversation(20), 20);
+
+    const rows = db.getBlocksBySession("ws-1", "sess-1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.is_stub).toBe(0);
+    expect(rows[0]!.token_count).toBe(250); // untouched by the arm
+  });
+
+  it("keeps eliding on every turn — the failure that made the feature a no-op", () => {
+    // With sticky is_stub, elision applies once per block and then stops:
+    // getPrunableBlocks filters is_stub = 0. Re-eliding every turn is required,
+    // because the client re-sends full history and never learns what was elided.
+    const counts: number[] = [];
+    for (let turns = 8; turns <= 20; turns++) {
+      counts.push(run(conversation(turns), turns).pruned_blocks_count);
+    }
+
+    expect(counts.every((c) => c > 0)).toBe(true);
+    expect(counts.at(-1)!).toBeGreaterThan(counts[0]!);
+    // Monotone: the elided set only ever grows as the conversation grows.
+    expect([...counts].sort((a, b) => a - b)).toEqual(counts);
+  });
+
+  it("records the arm and byte savings, not fabricated token counts", () => {
+    const result = run(conversation(20), 20);
+    const explanation = db.getTurnExplanation({
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      turn_number: 20,
+    });
+
+    expect(result.elision_decisions.length).toBe(result.pruned_blocks_count);
+    // prune_decisions carries token counts that would have to be invented here.
+    expect(result.prune_decisions).toEqual([]);
+    expect(explanation?.provenance?.elision_mode).toBe("stateless");
+    expect(explanation?.provenance?.elided_bytes).toBeGreaterThan(0);
+  });
+
+  it("respects pruner.enabled = false", () => {
+    const request = conversation(20);
+    const result = handlePreRequest({
+      db,
+      route: "other",
+      tracker: new CacheStateTracker(),
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      current_turn: 20,
+      original_request: request,
+      message_classifications: request.messages.map(() => cl("VOLATILE")),
+      block_placements: [],
+      pruner: { enabled: false, k: 4, mode: "default" },
+      elision_mode: "stateless",
+      now_ms: 1_715_000_004_000,
+    });
+
+    expect(result.pruned_blocks_count).toBe(0);
+    expect(JSON.stringify(result.request.messages)).toContain(BIG);
+  });
+
+  it.each(["stateless", "legacy"] as const)(
+    "honours the k_pruner kill switch on the %s arm",
+    (mode) => {
+      // k_pruner used to be checked only on the OpenAI path, so the Anthropic
+      // lane kept eliding with the feature switched off. Both arms check it now.
+      const blockId = "01KPREQKILLSWITCH00001";
+      insertBlock(blockId, { unused_turns: 9 });
+      const request = conversation(20);
+
+      const result = handlePreRequest({
+        db,
+        route: "other",
+        tracker: new CacheStateTracker(),
+        workspace_id: "ws-1",
+        session_id: "sess-1",
+        current_turn: 20,
+        original_request: request,
+        message_classifications: request.messages.map(() => cl("VOLATILE")),
+        block_placements: [placement(blockId)],
+        pruner: { enabled: true, k: 4, mode: "default" },
+        elision_mode: mode,
+        k_pruner_enabled: false,
+        now_ms: 1_715_000_004_000,
+      });
+
+      expect(result.pruned_blocks_count).toBe(0);
+      expect(JSON.stringify(result.request.messages)).toContain(BIG);
+      expect(db.getBlock(blockId)!.is_stub).toBe(0);
+    },
+  );
+
+  it("stands down when mutation is disabled, but is still recorded as the stateless arm", () => {
+    // This configuration IS the Gate 5 control lane: stateless selected,
+    // mutation off. It must elide nothing (the body is forwarded unchanged, so
+    // recording elided bytes would be a lie) while still being labelled
+    // stateless — labelling it legacy would compare the wrong two things.
+    const request = conversation(20);
+    const result = handlePreRequest({
+      db,
+      route: "other",
+      tracker: new CacheStateTracker(),
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      current_turn: 20,
+      original_request: request,
+      message_classifications: request.messages.map(() => cl("VOLATILE")),
+      block_placements: [],
+      pruner: { enabled: true, k: 4, mode: "default" },
+      elision_mode: "stateless",
+      mutation_enabled: false,
+      now_ms: 1_715_000_004_000,
+    });
+
+    expect(result.pruned_blocks_count).toBe(0);
+    expect(result.elision_decisions).toEqual([]);
+    expect(result.elision_mode).toBe("stateless");
+    expect(JSON.stringify(result.request.messages)).toContain(BIG);
+    // The arm is stateless AND it did not run. Recording only the first would
+    // make this turn indistinguishable from one that elided nothing usefully.
+    expect(result.elision_active).toBe(false);
+
+    const explanation = db.getTurnExplanation({
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      turn_number: 20,
+    });
+    expect(explanation?.provenance?.elision_mode).toBe("stateless");
+    expect(explanation?.provenance?.elision_active).toBe(false);
+    expect(explanation?.provenance?.elided_bytes ?? 0).toBe(0);
+  });
+
+  it("reports mutated for an elided request the orchestrator left alone", () => {
+    // orchestrate() reports whether IT placed cache breakpoints, and places
+    // none on a request with no system prompt and no tools. The proxy forwards
+    // the ORIGINAL body whenever mutated is false — so if elision did not count
+    // as mutation, this request would be elided, the bytes recorded as saved,
+    // and the original sent anyway.
+    const request = conversation(20);
+    delete (request as { system?: unknown }).system;
+    delete (request as { tools?: unknown }).tools;
+
+    const result = handlePreRequest({
+      db,
+      route: "other",
+      tracker: new CacheStateTracker(),
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      current_turn: 20,
+      original_request: request,
+      message_classifications: request.messages.map(() => cl("VOLATILE")),
+      block_placements: [],
+      pruner: { enabled: true, k: 4, mode: "default" },
+      elision_mode: "stateless",
+      now_ms: 1_715_000_004_000,
+    });
+
+    expect(result.pruned_blocks_count).toBeGreaterThan(0);
+    expect(result.mutated).toBe(true);
+    // And the returned body really is the elided one.
+    expect(JSON.stringify(result.request.messages)).toContain("cachelane:elided");
+  });
+
+  it("defaults to the legacy arm when no mode is given", () => {
+    const blockId = "01KPREQDEFAULT00000001";
+    insertBlock(blockId, { unused_turns: 3 });
+
+    const result = handlePreRequest({
+      db,
+      route: "other",
+      tracker: new CacheStateTracker(),
+      workspace_id: "ws-1",
+      session_id: "sess-1",
+      current_turn: 4,
+      original_request: baseRequest(),
+      message_classifications: [cl("SEMI"), cl("VOLATILE")],
+      block_placements: [placement(blockId)],
+      pruner: { enabled: true, k: 3, mode: "default" },
+      now_ms: 1_715_000_004_000,
+    });
+
+    expect(result.elision_mode).toBe("legacy");
+    expect(db.getBlock(blockId)!.is_stub).toBe(1); // legacy still marks stubs
+  });
+});

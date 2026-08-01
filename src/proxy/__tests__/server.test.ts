@@ -638,6 +638,163 @@ describe("proxy pipeline integration", () => {
     });
 
     /**
+     * The Anthropic stateless arm, end-to-end through the proxy rather than
+     * through handlePreRequest directly — parity with the OpenAI coverage in
+     * openai-pipeline.test.ts. What matters here is that the arm is selected
+     * from a config FILE and that the transformed body is what actually leaves
+     * the process, neither of which a unit test on the hook can show.
+     */
+    it("forwards a statelessly elided body when the config selects that arm", async () => {
+      const armTmp = fs.mkdtempSync(path.join(os.tmpdir(), "cachelane-anthropic-arm-"));
+      const configPath = path.join(armTmp, "config.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          ...DEFAULT_CONFIG,
+          features: {
+            ...DEFAULT_CONFIG.features,
+            elision_mode: "stateless",
+            mutation_enabled: true,
+          },
+        }),
+      );
+
+      const big = "q".repeat(8000);
+      const messages: AnthropicMessagesRequest["messages"] = [];
+      for (let t = 0; t < 20; t++) {
+        // Valid pairing: tool_use in the assistant turn, tool_result in the
+        // user turn that follows it. The API rejects orphaned tool_results.
+        messages.push({ role: "user", content: [{ type: "text", text: `ask ${t}` }] });
+        messages.push({
+          role: "assistant",
+          content: [{ type: "tool_use", id: `toolu_s${t}`, name: "Read", input: {} }],
+        });
+        messages.push({
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: `toolu_s${t}`, content: big }],
+        });
+      }
+
+      const armProxy = startProxy({
+        port: 0,
+        db_path: path.join(armTmp, "arm.db"),
+        config_path: configPath,
+        workspace_id: "test-ws",
+        session_id: "arm-session",
+        upstream: { host: "127.0.0.1", port: fakeUpstreamPort, ssl: false },
+      });
+
+      try {
+        const armPort = await waitForServer(armProxy);
+        lastCaptured = null;
+        await postMessages(
+          armPort,
+          JSON.stringify({
+            model: "claude-opus-4-7",
+            system: [{ type: "text", text: "System." }],
+            tools: [{ name: "Read", input_schema: { type: "object" } }],
+            messages,
+            max_tokens: 1024,
+          }),
+        );
+
+        expect(lastCaptured).not.toBeNull();
+        const forwarded = JSON.parse(lastCaptured!.body) as AnthropicMessagesRequest;
+        const stubbed = forwarded.messages.filter(
+          (m) =>
+            Array.isArray(m.content) &&
+            m.content.some((c) => String((c as { content?: unknown }).content).includes("cachelane:elided")),
+        );
+        expect(stubbed.length).toBeGreaterThan(0);
+        // The stateless arm never marks stubs in the database.
+        const armDb = openDatabase(path.join(armTmp, "arm.db"));
+        try {
+          const rows = armDb.getBlocksBySession("test-ws", "arm-session");
+          // [].every(...) is true, so without this the assertion below passes
+          // just as happily when nothing was recorded at all.
+          expect(rows.length).toBeGreaterThan(0);
+          expect(rows.every((r) => r.is_stub === 0)).toBe(true);
+        } finally {
+          armDb.close();
+        }
+      } finally {
+        await closeServer(armProxy);
+        fs.rmSync(armTmp, { recursive: true, force: true });
+      }
+    });
+
+    /**
+     * The kill switch, end-to-end from a config FILE on the Anthropic path.
+     *
+     * features.k_pruner was historically read only on the OpenAI branch, so the
+     * lane carrying most of the traffic ignored it. This asserts the config
+     * value reaches the decision, rather than that the plumbing merely exists.
+     */
+    it("honours features.k_pruner from config on the Anthropic path", async () => {
+      const armTmp = fs.mkdtempSync(path.join(os.tmpdir(), "cachelane-killswitch-"));
+      const configPath = path.join(armTmp, "config.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          ...DEFAULT_CONFIG,
+          pruner: { ...DEFAULT_CONFIG.pruner, enabled: true, k: 1 },
+          features: {
+            ...DEFAULT_CONFIG.features,
+            k_pruner: false, // the switch under test
+            mutation_enabled: true,
+            elision_mode: "stateless",
+          },
+        }),
+      );
+
+      const big = "k".repeat(8000);
+      const messages: AnthropicMessagesRequest["messages"] = [];
+      for (let t = 0; t < 20; t++) {
+        messages.push({ role: "user", content: [{ type: "text", text: `ask ${t}` }] });
+        messages.push({
+          role: "assistant",
+          content: [{ type: "tool_use", id: `toolu_k${t}`, name: "Read", input: {} }],
+        });
+        messages.push({
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: `toolu_k${t}`, content: big }],
+        });
+      }
+
+      const armProxy = startProxy({
+        port: 0,
+        db_path: path.join(armTmp, "kill.db"),
+        config_path: configPath,
+        workspace_id: "test-ws",
+        session_id: "kill-session",
+        upstream: { host: "127.0.0.1", port: fakeUpstreamPort, ssl: false },
+      });
+
+      try {
+        const armPort = await waitForServer(armProxy);
+        lastCaptured = null;
+        await postMessages(
+          armPort,
+          JSON.stringify({
+            model: "claude-opus-4-7",
+            system: [{ type: "text", text: "System." }],
+            tools: [{ name: "Read", input_schema: { type: "object" } }],
+            messages,
+            max_tokens: 1024,
+          }),
+        );
+
+        expect(lastCaptured).not.toBeNull();
+        expect(lastCaptured!.body).not.toContain("cachelane:elided");
+        expect(lastCaptured!.body).not.toContain("[stub:");
+        expect(lastCaptured!.body).toContain(big);
+      } finally {
+        await closeServer(armProxy);
+        fs.rmSync(armTmp, { recursive: true, force: true });
+      }
+    });
+
+    /**
      * Layer 2. `proxyAndRecord` used to take a single `body`, forward it, and
      * hand that same buffer to `extractAndInsertToolResults` — so with mutation
      * on, the recorder ingested CacheLane's own stubs as if the client had sent
