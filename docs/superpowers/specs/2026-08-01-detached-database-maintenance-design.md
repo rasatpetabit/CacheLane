@@ -29,7 +29,7 @@ Add a dedicated maintenance script with two modes:
 
 The transient unit runs independently of the launching session. Losing the launcher connection may hide its final output, but cannot cancel cleanup or prevent service recovery.
 
-The privileged worker is installed at the fixed path `/usr/local/sbin/cachelane-compact-runtime-databases` as `root:root` mode `0755`. The unprivileged launcher uses fixed `/usr/bin/sudo` and `/usr/bin/systemd-run` paths, validates `/`, `/usr`, `/usr/local`, `/usr/local/sbin`, and the worker as root-owned and not group/world writable, and passes no caller-controlled executable, install path, service user, database path, or binary override across the privilege boundary.
+The privileged worker is installed at the fixed path `/usr/local/sbin/cachelane-compact-runtime-databases` as `root:root` mode `0755`. The unprivileged launcher uses fixed `/usr/bin/sudo` and `/usr/bin/systemd-run` paths, rejects symlinks, validates `/`, `/usr`, `/usr/local`, `/usr/local/sbin`, and the worker as root-owned and not group/world writable, and passes no caller-controlled executable, install path, service user, database path, or binary override across the privilege boundary. It omits `systemd-run --collect` so a failed maintenance unit remains inspectable.
 
 ## Maintenance flow
 

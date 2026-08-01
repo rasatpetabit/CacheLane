@@ -6,7 +6,6 @@ import path from "node:path";
 import Database from "better-sqlite3";
 
 const maintenanceScriptPath = path.resolve("scripts/compact-runtime-databases.sh");
-const maintenanceScript = fs.readFileSync(maintenanceScriptPath, "utf8");
 const tempRoots: string[] = [];
 
 afterEach(() => {
@@ -20,6 +19,8 @@ interface Harness {
   env: NodeJS.ProcessEnv;
   databasePaths: string[];
   initialSizes: number[];
+  trustRoot: string;
+  privilegedWorker: string;
 }
 
 function createBloatedDatabase(databasePath: string): number {
@@ -43,7 +44,25 @@ function makeHarness(failAction = ""): Harness {
   const binDir = path.join(root, "bin");
   const installDir = path.join(root, "runtime");
   const logPath = path.join(root, "commands.log");
+  const trustRoot = path.join(root, "trust-root");
+  const privilegedWorker = path.join(
+    trustRoot,
+    "usr",
+    "local",
+    "sbin",
+    "cachelane-compact-runtime-databases",
+  );
   fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(path.dirname(privilegedWorker), { recursive: true });
+  for (const trustedPath of [
+    trustRoot,
+    path.join(trustRoot, "usr"),
+    path.join(trustRoot, "usr", "local"),
+    path.join(trustRoot, "usr", "local", "sbin"),
+  ]) {
+    fs.chmodSync(trustedPath, 0o755);
+  }
+  fs.writeFileSync(privilegedWorker, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
   fs.mkdirSync(path.join(installDir, "node_modules"), { recursive: true });
   fs.symlinkSync(
     path.resolve("node_modules/better-sqlite3"),
@@ -99,6 +118,8 @@ esac
     logPath,
     databasePaths,
     initialSizes,
+    trustRoot,
+    privilegedWorker,
     env: {
       ...process.env,
       CACHELANE_MAINTENANCE_TESTING: "1",
@@ -108,10 +129,11 @@ esac
       CACHELANE_HEALTH_STATUS: "200",
       CACHELANE_INACTIVE_UNIT: "",
       CACHELANE_LAUNCH_CAPTURE: "",
+      CACHELANE_TEST_TRUST_ROOT: trustRoot,
       CACHELANE_SYSTEMCTL_BIN: path.join(binDir, "systemctl"),
       CACHELANE_CURL_BIN: path.join(binDir, "curl"),
       CACHELANE_RUNUSER_BIN: path.join(binDir, "runuser"),
-      CACHELANE_NODE_BIN: "/usr/bin/node",
+      CACHELANE_NODE_BIN: process.execPath,
       CACHELANE_INSTALL: installDir,
       CACHELANE_SERVICE_USER: "ras",
       CACHELANE_CLAUDE_DB: claudeDb,
@@ -238,32 +260,45 @@ describe("detached database maintenance worker", () => {
       "/usr/bin/sudo",
       "/usr/bin/systemd-run",
       "--unit=cachelane-db-maintenance",
-      "--collect",
       "--wait",
       "--property=Type=oneshot",
-      "/usr/local/sbin/cachelane-compact-runtime-databases",
+      harness.privilegedWorker,
       "--worker",
     ]);
   });
 
-  it("validates every privileged worker path ancestor", () => {
-    expect(maintenanceScript).toContain(
-      'for path in / /usr /usr/local /usr/local/sbin "$PRIVILEGED_WORKER"; do',
-    );
+  it("rejects a symlink in the privileged worker path", () => {
+    const harness = makeHarness();
+    const localPath = path.join(harness.trustRoot, "usr", "local");
+    const replacement = path.join(harness.trustRoot, "replacement");
+    fs.renameSync(localPath, replacement);
+    fs.symlinkSync(replacement, localPath, "dir");
+    const capturePath = `${harness.logPath}.launch`;
+    harness.env.CACHELANE_LAUNCH_CAPTURE = capturePath;
+
+    const result = spawnSync("bash", [maintenanceScriptPath], {
+      env: harness.env,
+      encoding: "utf8",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("privileged path must not be a symbolic link");
+    expect(fs.existsSync(capturePath)).toBe(false);
   });
 
   it("prints a fixed privileged launch command with no caller-controlled paths", () => {
     const harness = makeHarness();
     const result = spawnSync("bash", [maintenanceScriptPath, "--dry-run"], {
-      env: harness.env,
+      env: { ...harness.env, CACHELANE_MAINTENANCE_TESTING: "0" },
       encoding: "utf8",
     });
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      "/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker",
+      "/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker",
     );
     expect(result.stdout).not.toContain(harness.env.CACHELANE_INSTALL!);
     expect(result.stdout).not.toContain("--setenv=");
+    expect(result.stdout).not.toContain("--collect");
   });
 });

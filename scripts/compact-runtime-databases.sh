@@ -27,7 +27,22 @@ fi
 SUDO_BIN=/usr/bin/sudo
 SYSTEMD_RUN_BIN=/usr/bin/systemd-run
 UNIT_NAME=cachelane-db-maintenance
-PRIVILEGED_WORKER=/usr/local/sbin/cachelane-compact-runtime-databases
+if [[ "$TESTING" == "1" && -n "${CACHELANE_TEST_TRUST_ROOT:-}" ]]; then
+  TRUST_ROOT="$CACHELANE_TEST_TRUST_ROOT"
+  EXPECTED_OWNER_UID="$(id -u)"
+  PRIVILEGED_WORKER="$TRUST_ROOT/usr/local/sbin/cachelane-compact-runtime-databases"
+  TRUSTED_PATHS=(
+    "$TRUST_ROOT"
+    "$TRUST_ROOT/usr"
+    "$TRUST_ROOT/usr/local"
+    "$TRUST_ROOT/usr/local/sbin"
+    "$PRIVILEGED_WORKER"
+  )
+else
+  EXPECTED_OWNER_UID=0
+  PRIVILEGED_WORKER=/usr/local/sbin/cachelane-compact-runtime-databases
+  TRUSTED_PATHS=(/ /usr /usr/local /usr/local/sbin "$PRIVILEGED_WORKER")
+fi
 CLAUDE_SERVICE=cachelane-claude.service
 LITELLM_SERVICE=cachelane-litellm.service
 HEALTHCHECK_SERVICE=cachelane-healthcheck.service
@@ -36,7 +51,6 @@ LAUNCH_COMMAND=(
   "$SUDO_BIN"
   "$SYSTEMD_RUN_BIN"
   "--unit=$UNIT_NAME"
-  --collect
   --wait
   --property=Type=oneshot
   "$PRIVILEGED_WORKER"
@@ -177,15 +191,19 @@ print_launch_command() {
 
 validate_privileged_worker() {
   local path owner mode
-  for path in / /usr /usr/local /usr/local/sbin "$PRIVILEGED_WORKER"; do
+  for path in "${TRUSTED_PATHS[@]}"; do
     [[ -e "$path" ]] || {
       echo "error: required privileged path is missing: $path" >&2
       return 1
     }
+    [[ ! -L "$path" ]] || {
+      echo "error: privileged path must not be a symbolic link: $path" >&2
+      return 1
+    }
     owner="$(/usr/bin/stat -c '%u' "$path")"
     mode="$(/usr/bin/stat -c '%a' "$path")"
-    [[ "$owner" == "0" ]] || {
-      echo "error: privileged path is not root-owned: $path" >&2
+    [[ "$owner" == "$EXPECTED_OWNER_UID" ]] || {
+      echo "error: privileged path has an unexpected owner: $path" >&2
       return 1
     }
     (( (8#$mode & 0022) == 0 )) || {
@@ -200,11 +218,11 @@ validate_privileged_worker() {
 }
 
 launch_worker() {
+  validate_privileged_worker
   if [[ "$TESTING" == "1" && -n "${CACHELANE_LAUNCH_CAPTURE:-}" ]]; then
     printf '%s\n' "${LAUNCH_COMMAND[@]}" > "$CACHELANE_LAUNCH_CAPTURE"
     return 0
   fi
-  validate_privileged_worker
   "${LAUNCH_COMMAND[@]}"
 }
 
