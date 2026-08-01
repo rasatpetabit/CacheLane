@@ -32,6 +32,16 @@ CLAUDE_SERVICE=cachelane-claude.service
 LITELLM_SERVICE=cachelane-litellm.service
 HEALTHCHECK_SERVICE=cachelane-healthcheck.service
 TIMER=cachelane-healthcheck.timer
+LAUNCH_COMMAND=(
+  "$SUDO_BIN"
+  "$SYSTEMD_RUN_BIN"
+  "--unit=$UNIT_NAME"
+  --collect
+  --wait
+  --property=Type=oneshot
+  "$PRIVILEGED_WORKER"
+  --worker
+)
 
 recover() {
   local status="$1"
@@ -72,11 +82,14 @@ NODE
 }
 
 wait_for_health() {
-  local service="$1" port="$2" deadline body
+  local service="$1" port="$2" deadline response body http_status
   deadline=$((SECONDS + READY_TIMEOUT_SEC))
   while (( SECONDS <= deadline )); do
-    body="$($CURL_BIN -fsS --max-time 2 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
-    if "$SYSTEMCTL_BIN" is-active --quiet "$service" && [[ "$body" == *'"status":"ok"'* ]]; then
+    response="$($CURL_BIN -sS --max-time 2 -w $'\n%{http_code}' "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
+    http_status="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if "$SYSTEMCTL_BIN" is-active --quiet "$service" \
+      && [[ "$http_status" == "200" && "$body" == *'"status":"ok"'* ]]; then
       return 0
     fi
     sleep 1
@@ -158,12 +171,13 @@ run_worker() {
 }
 
 print_launch_command() {
-  printf '%s\n' "$SUDO_BIN $SYSTEMD_RUN_BIN --unit=$UNIT_NAME --collect --wait --property=Type=oneshot $PRIVILEGED_WORKER --worker"
+  printf '%q ' "${LAUNCH_COMMAND[@]}"
+  printf '\n'
 }
 
 validate_privileged_worker() {
   local path owner mode
-  for path in /usr/local/sbin "$PRIVILEGED_WORKER"; do
+  for path in / /usr /usr/local /usr/local/sbin "$PRIVILEGED_WORKER"; do
     [[ -e "$path" ]] || {
       echo "error: required privileged path is missing: $path" >&2
       return 1
@@ -186,13 +200,12 @@ validate_privileged_worker() {
 }
 
 launch_worker() {
+  if [[ "$TESTING" == "1" && -n "${CACHELANE_LAUNCH_CAPTURE:-}" ]]; then
+    printf '%s\n' "${LAUNCH_COMMAND[@]}" > "$CACHELANE_LAUNCH_CAPTURE"
+    return 0
+  fi
   validate_privileged_worker
-  "$SUDO_BIN" "$SYSTEMD_RUN_BIN" \
-    --unit="$UNIT_NAME" \
-    --collect \
-    --wait \
-    --property=Type=oneshot \
-    "$PRIVILEGED_WORKER" --worker
+  "${LAUNCH_COMMAND[@]}"
 }
 
 case "${1:-}" in

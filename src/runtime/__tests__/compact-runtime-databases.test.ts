@@ -6,6 +6,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 
 const maintenanceScriptPath = path.resolve("scripts/compact-runtime-databases.sh");
+const maintenanceScript = fs.readFileSync(maintenanceScriptPath, "utf8");
 const tempRoots: string[] = [];
 
 afterEach(() => {
@@ -75,7 +76,7 @@ case "$name" in
     if [[ "$CACHELANE_HEALTH_FAIL" == "1" ]]; then
       exit 22
     fi
-    printf '%s\\n' '{"status":"ok","inflight":0}'
+    printf '%s\\n%s\\n' '{"status":"ok","inflight":0}' "$CACHELANE_HEALTH_STATUS"
     ;;
   runuser)
     if [[ -n "$CACHELANE_TEST_FAIL_ACTION" && "$*" == *"$CACHELANE_TEST_FAIL_ACTION"* ]]; then
@@ -104,7 +105,9 @@ esac
       CACHELANE_TEST_LOG: logPath,
       CACHELANE_TEST_FAIL_ACTION: failAction,
       CACHELANE_HEALTH_FAIL: "0",
+      CACHELANE_HEALTH_STATUS: "200",
       CACHELANE_INACTIVE_UNIT: "",
+      CACHELANE_LAUNCH_CAPTURE: "",
       CACHELANE_SYSTEMCTL_BIN: path.join(binDir, "systemctl"),
       CACHELANE_CURL_BIN: path.join(binDir, "curl"),
       CACHELANE_RUNUSER_BIN: path.join(binDir, "runuser"),
@@ -184,10 +187,28 @@ describe("detached database maintenance worker", () => {
           !(line.includes("cachelane-claude") && line.includes("cachelane-litellm")),
       ),
     ).toBe(true);
-    expect(lines.indexOf("systemctl start cachelane-claude.service")).toBeLessThan(
-      lines.indexOf("systemctl stop cachelane-litellm.service"),
-    );
+    const claudeStart = lines.indexOf("systemctl start cachelane-claude.service");
+    const litellmStop = lines.indexOf("systemctl stop cachelane-litellm.service");
+    const litellmStart = lines.indexOf("systemctl start cachelane-litellm.service");
+    expect(claudeStart).toBeGreaterThan(-1);
+    expect(litellmStop).toBeGreaterThan(-1);
+    expect(litellmStart).toBeGreaterThan(-1);
+    expect(claudeStart).toBeLessThan(litellmStop);
+    expect(litellmStart).toBeGreaterThan(litellmStop);
     expect(log).toContain("systemctl start cachelane-healthcheck.service");
+  });
+
+  it("rejects a non-200 health response even when its body says ok", () => {
+    const harness = makeHarness();
+    harness.env.CACHELANE_HEALTH_STATUS = "302";
+    const result = runWorker(harness.env);
+    const log = readLog(harness.logPath);
+
+    expect(result.status).not.toBe(0);
+    expect(log).toContain("systemctl start cachelane-claude.service");
+    expect(log).toContain("systemctl start cachelane-litellm.service");
+    expect(log).toContain("systemctl start cachelane-healthcheck.service");
+    expect(log).toContain("systemctl start cachelane-healthcheck.timer");
   });
 
   it("returns non-zero and recovers every unit when a health gate fails", () => {
@@ -201,6 +222,34 @@ describe("detached database maintenance worker", () => {
     expect(log).toContain("systemctl start cachelane-litellm.service");
     expect(log).toContain("systemctl start cachelane-healthcheck.service");
     expect(log).toContain("systemctl start cachelane-healthcheck.timer");
+  });
+
+  it("executes the default launcher branch with the fixed detached command", () => {
+    const harness = makeHarness();
+    const capturePath = `${harness.logPath}.launch`;
+    harness.env.CACHELANE_LAUNCH_CAPTURE = capturePath;
+    const result = spawnSync("bash", [maintenanceScriptPath], {
+      env: harness.env,
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.readFileSync(capturePath, "utf8").trim().split("\n")).toEqual([
+      "/usr/bin/sudo",
+      "/usr/bin/systemd-run",
+      "--unit=cachelane-db-maintenance",
+      "--collect",
+      "--wait",
+      "--property=Type=oneshot",
+      "/usr/local/sbin/cachelane-compact-runtime-databases",
+      "--worker",
+    ]);
+  });
+
+  it("validates every privileged worker path ancestor", () => {
+    expect(maintenanceScript).toContain(
+      'for path in / /usr /usr/local /usr/local/sbin "$PRIVILEGED_WORKER"; do',
+    );
   });
 
   it("prints a fixed privileged launch command with no caller-controlled paths", () => {

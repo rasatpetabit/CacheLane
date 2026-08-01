@@ -29,7 +29,7 @@ Add a dedicated maintenance script with two modes:
 
 The transient unit runs independently of the launching session. Losing the launcher connection may hide its final output, but cannot cancel cleanup or prevent service recovery.
 
-The privileged worker is installed at the fixed path `/usr/local/sbin/cachelane-compact-runtime-databases` as `root:root` mode `0755`. The unprivileged launcher uses fixed `/usr/bin/sudo` and `/usr/bin/systemd-run` paths, validates the worker and `/usr/local/sbin` ownership and permissions, and passes no caller-controlled executable, install path, service user, database path, or binary override across the privilege boundary.
+The privileged worker is installed at the fixed path `/usr/local/sbin/cachelane-compact-runtime-databases` as `root:root` mode `0755`. The unprivileged launcher uses fixed `/usr/bin/sudo` and `/usr/bin/systemd-run` paths, validates `/`, `/usr`, `/usr/local`, `/usr/local/sbin`, and the worker as root-owned and not group/world writable, and passes no caller-controlled executable, install path, service user, database path, or binary override across the privilege boundary.
 
 ## Maintenance flow
 
@@ -71,12 +71,13 @@ Add a shell integration harness executed by Vitest. The harness supplies fake `s
 Required cases:
 
 1. The launcher submits a detached transient systemd unit rather than running the worker in the initiating process.
-2. A successful worker compacts and verifies Claude before LiteLLM, restores each lane before proceeding, restarts the timer, and runs the final healthcheck.
+2. A successful worker compacts and verifies Claude before LiteLLM, explicitly restarts both lanes, restarts the timer, and runs the final healthcheck.
 3. A forced compaction failure exits non-zero and still attempts to start both lane services and the timer.
 4. A forced health-gate failure exits non-zero and runs the same recovery path.
 5. An inactive lane or timer prerequisite exits non-zero without any service mutation.
-6. The launcher dry run contains only fixed privileged paths and no caller-controlled `--setenv` values.
-7. No execution path contains a command that stops both lane services together.
+6. The launcher dry run contains only fixed privileged paths and no caller-controlled `--setenv` values, while a test-only capture executes the default launcher branch and records the exact submitted argument vector.
+7. A health body containing `"status":"ok"` is accepted only with exact HTTP status `200`; redirects and other non-200 responses fail recovery.
+8. No execution path contains a command that stops both lane services together.
 
 The failure-path test is the regression test for the 2026-07-31 self-cutoff incident.
 

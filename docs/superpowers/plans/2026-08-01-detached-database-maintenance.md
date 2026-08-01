@@ -24,7 +24,7 @@ This section is binding and supersedes earlier task snippets that used fake `sud
 
 - The launcher uses fixed `/usr/bin/sudo`, `/usr/bin/systemd-run`, unit name `cachelane-db-maintenance`, and worker path `/usr/local/sbin/cachelane-compact-runtime-databases`.
 - No caller-controlled executable, install path, service user, database path, Node path, or timeout crosses into the root transient unit. Environment overrides are test-only for direct unprivileged `--worker` execution.
-- The launcher validates that `/usr/local/sbin` and the worker are root-owned and not group/world writable. `--dry-run` prints the fixed command without elevation.
+- The launcher validates `/`, `/usr`, `/usr/local`, `/usr/local/sbin`, and the worker as root-owned and not group/world writable. `--dry-run` prints the fixed command without elevation, and test-only capture executes the default launcher branch without sudo.
 - The worker rejects an inactive lane or timer prerequisite before installing traps or mutating services; unconditional recovery therefore restores a known-active baseline.
 - The harness's fake `runuser` strips its user-selection arguments and executes the real embedded Node program against temporary SQLite databases. It asserts size/freelist reduction and `quick_check=ok`.
 
@@ -328,11 +328,11 @@ UNIT_NAME=cachelane-db-maintenance
 PRIVILEGED_WORKER=/usr/local/sbin/cachelane-compact-runtime-databases
 ```
 
-Before default launch, require `/usr/local/sbin` and `$PRIVILEGED_WORKER` to be root-owned and not group/world writable. Submit only the fixed worker path. Keep path and command overrides inside `CACHELANE_MAINTENANCE_TESTING=1` direct-worker mode, which contains no sudo operation.
+Before default launch, require `/`, `/usr`, `/usr/local`, `/usr/local/sbin`, and `$PRIVILEGED_WORKER` to be root-owned and not group/world writable. Submit only the fixed worker path. Keep path and command overrides inside `CACHELANE_MAINTENANCE_TESTING=1` direct-worker mode, which contains no sudo operation. A test-only capture file records the real launcher branch's fixed argument vector without executing sudo.
 
 - [ ] **Step 3: Verify privilege-boundary tests pass**
 
-Run the two targeted test files again. Expected: all tests pass and the launcher output contains no caller-controlled paths.
+Run the two targeted test files again. Expected: all tests pass, including exact HTTP `200`, both lane restart assertions, ancestor trust validation, and default-launch argument capture with no caller-controlled paths.
 
 - [ ] **Step 4: Write the inactive-prerequisite regression test**
 
