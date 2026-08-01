@@ -24,6 +24,7 @@ recover() {
   set +e
   "$SYSTEMCTL_BIN" start "$CLAUDE_SERVICE"
   "$SYSTEMCTL_BIN" start "$LITELLM_SERVICE"
+  "$SYSTEMCTL_BIN" start "$HEALTHCHECK_SERVICE"
   "$SYSTEMCTL_BIN" start "$TIMER"
   exit "$status"
 }

@@ -120,6 +120,7 @@ describe("detached database maintenance worker", () => {
     expect(result.status).not.toBe(0);
     expect(log).toContain("systemctl start cachelane-claude.service");
     expect(log).toContain("systemctl start cachelane-litellm.service");
+    expect(log).toContain("systemctl start cachelane-healthcheck.service");
     expect(log).toContain("systemctl start cachelane-healthcheck.timer");
   });
 
@@ -159,6 +160,7 @@ describe("detached database maintenance worker", () => {
     expect(result.status).not.toBe(0);
     expect(log).toContain("systemctl start cachelane-claude.service");
     expect(log).toContain("systemctl start cachelane-litellm.service");
+    expect(log).toContain("systemctl start cachelane-healthcheck.service");
     expect(log).toContain("systemctl start cachelane-healthcheck.timer");
   });
 
