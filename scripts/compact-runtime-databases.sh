@@ -5,8 +5,11 @@ INSTALL="${CACHELANE_INSTALL:-/srv/cachelane}"
 SYSTEMCTL_BIN="${CACHELANE_SYSTEMCTL_BIN:-systemctl}"
 CURL_BIN="${CACHELANE_CURL_BIN:-curl}"
 RUNUSER_BIN="${CACHELANE_RUNUSER_BIN:-runuser}"
+SUDO_BIN="${CACHELANE_SUDO_BIN:-sudo}"
+SYSTEMD_RUN_BIN="${CACHELANE_SYSTEMD_RUN_BIN:-systemd-run}"
 NODE_BIN="${CACHELANE_NODE_BIN:-/usr/bin/node}"
 READY_TIMEOUT_SEC="${CACHELANE_READY_TIMEOUT_SEC:-30}"
+UNIT_NAME="${CACHELANE_MAINTENANCE_UNIT:-cachelane-db-maintenance}"
 CLAUDE_SERVICE=cachelane-claude.service
 LITELLM_SERVICE=cachelane-litellm.service
 TIMER=cachelane-healthcheck.timer
@@ -125,7 +128,25 @@ run_worker() {
   echo "CacheLane database maintenance completed successfully"
 }
 
+launch_worker() {
+  local worker="$INSTALL/scripts/compact-runtime-databases.sh"
+  [[ -x "$worker" ]] || {
+    echo "error: installed maintenance worker is missing: $worker" >&2
+    echo "deploy the current runtime with scripts/install-runtime.sh first" >&2
+    return 1
+  }
+
+  "$SUDO_BIN" "$SYSTEMD_RUN_BIN" \
+    --unit="$UNIT_NAME" \
+    --collect \
+    --wait \
+    --property=Type=oneshot \
+    --setenv=CACHELANE_INSTALL="$INSTALL" \
+    "$worker" --worker
+}
+
 case "${1:-}" in
   --worker) run_worker ;;
-  *) echo "usage: $0 --worker" >&2; exit 2 ;;
+  "") launch_worker ;;
+  *) echo "usage: $0 [--worker]" >&2; exit 2 ;;
 esac

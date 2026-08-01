@@ -63,12 +63,17 @@ case "$name" in
       exit 42
     fi
     ;;
+  sudo)
+    exec "$@"
+    ;;
+  systemd-run)
+    ;;
 esac
 `,
     { mode: 0o755 },
   );
 
-  for (const name of ["systemctl", "curl", "runuser"]) {
+  for (const name of ["systemctl", "curl", "runuser", "sudo", "systemd-run"]) {
     fs.symlinkSync(fakeTool, path.join(binDir, name));
   }
 
@@ -83,6 +88,8 @@ esac
       CACHELANE_SYSTEMCTL_BIN: path.join(binDir, "systemctl"),
       CACHELANE_CURL_BIN: path.join(binDir, "curl"),
       CACHELANE_RUNUSER_BIN: path.join(binDir, "runuser"),
+      CACHELANE_SUDO_BIN: path.join(binDir, "sudo"),
+      CACHELANE_SYSTEMD_RUN_BIN: path.join(binDir, "systemd-run"),
       CACHELANE_NODE_BIN: "/usr/bin/node",
       CACHELANE_INSTALL: installDir,
       CACHELANE_SERVICE_USER: "ras",
@@ -136,5 +143,43 @@ describe("detached database maintenance worker", () => {
       lines.indexOf("systemctl stop cachelane-litellm.service"),
     );
     expect(log).toContain("systemctl start cachelane-healthcheck.service");
+  });
+
+  it("returns non-zero and recovers every unit when a health gate fails", () => {
+    const harness = makeHarness();
+    harness.env.CACHELANE_HEALTH_FAIL = "1";
+    const result = runWorker(harness.env);
+    const log = readLog(harness.logPath);
+
+    expect(result.status).not.toBe(0);
+    expect(log).toContain("systemctl start cachelane-claude.service");
+    expect(log).toContain("systemctl start cachelane-litellm.service");
+    expect(log).toContain("systemctl start cachelane-healthcheck.timer");
+  });
+
+  it("submits the installed worker to a detached transient systemd unit", () => {
+    const harness = makeHarness();
+    const installDir = harness.env.CACHELANE_INSTALL!;
+    const installedScript = path.join(
+      installDir,
+      "scripts",
+      "compact-runtime-databases.sh",
+    );
+    fs.mkdirSync(path.dirname(installedScript), { recursive: true });
+    fs.copyFileSync(maintenanceScriptPath, installedScript);
+    fs.chmodSync(installedScript, 0o755);
+
+    const result = spawnSync("bash", [maintenanceScriptPath], {
+      env: harness.env,
+      encoding: "utf8",
+    });
+    const log = readLog(harness.logPath);
+
+    expect(result.status).toBe(0);
+    expect(log).toContain(
+      "systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot",
+    );
+    expect(log).toContain(`--setenv=CACHELANE_INSTALL=${installDir}`);
+    expect(log).toContain(`${installedScript} --worker`);
   });
 });

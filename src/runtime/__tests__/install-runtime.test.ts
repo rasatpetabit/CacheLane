@@ -18,6 +18,11 @@ describe("install-runtime restart safety", () => {
     expect(installer).toContain("RuntimeDirectoryPreserve=yes");
   });
 
+  it("stages maintenance scripts without inlining compaction into deployment", () => {
+    expect(installer).toContain('rsync -a "$REPO_ROOT/scripts/" "$STAGE/scripts/"');
+    expect(installer).not.toContain("VACUUM");
+  });
+
   it("waits for two idle samples before each lane restart", () => {
     expect(installer).toContain("wait_for_lane_drain()");
     expect(installer).toContain('CACHELANE_DRAIN_TIMEOUT_SEC:-300');
