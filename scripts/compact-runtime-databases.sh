@@ -51,6 +51,7 @@ LAUNCH_COMMAND=(
   "$SUDO_BIN"
   "$SYSTEMD_RUN_BIN"
   "--unit=$UNIT_NAME"
+  --collect
   --wait
   --property=Type=oneshot
   "$PRIVILEGED_WORKER"

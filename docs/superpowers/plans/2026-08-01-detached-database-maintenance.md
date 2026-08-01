@@ -298,7 +298,7 @@ git commit -m "fix: make database maintenance recover lanes"
 - Modify: `src/runtime/__tests__/install-runtime.test.ts`
 
 **Interfaces:**
-- Consumes: fixed launcher command `/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker`. Omitting `--collect` preserves failed-unit observability.
+- Consumes: fixed launcher command `/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker`. `--collect` keeps the fixed unit name retryable; the nonzero wait result and journal preserve failure evidence.
 - Produces: a root-owned worker at `/usr/local/sbin/cachelane-compact-runtime-databases`, a non-elevating `--dry-run`, inactive-prerequisite rejection, and real SQLite maintenance coverage.
 
 - [ ] **Step 1: Write failing privilege-boundary tests**

@@ -154,6 +154,23 @@ function readLog(logPath: string): string {
   return fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
 }
 
+function expectRecoveryAfterLastHealthProbe(log: string): void {
+  const lines = log.trim().split("\n");
+  let lastCurl = -1;
+  for (const [index, line] of lines.entries()) {
+    if (line.startsWith("curl ")) lastCurl = index;
+  }
+  expect(lastCurl).toBeGreaterThan(-1);
+  for (const unit of [
+    "cachelane-claude.service",
+    "cachelane-litellm.service",
+    "cachelane-healthcheck.service",
+    "cachelane-healthcheck.timer",
+  ]) {
+    expect(lines.lastIndexOf(`systemctl start ${unit}`)).toBeGreaterThan(lastCurl);
+  }
+}
+
 describe("detached database maintenance worker", () => {
   it("restores both lanes and the timer when compaction fails", () => {
     const harness = makeHarness("CACHELANE_DB_ACTION=vacuum");
@@ -227,10 +244,7 @@ describe("detached database maintenance worker", () => {
     const log = readLog(harness.logPath);
 
     expect(result.status).not.toBe(0);
-    expect(log).toContain("systemctl start cachelane-claude.service");
-    expect(log).toContain("systemctl start cachelane-litellm.service");
-    expect(log).toContain("systemctl start cachelane-healthcheck.service");
-    expect(log).toContain("systemctl start cachelane-healthcheck.timer");
+    expectRecoveryAfterLastHealthProbe(log);
   });
 
   it("returns non-zero and recovers every unit when a health gate fails", () => {
@@ -240,10 +254,7 @@ describe("detached database maintenance worker", () => {
     const log = readLog(harness.logPath);
 
     expect(result.status).not.toBe(0);
-    expect(log).toContain("systemctl start cachelane-claude.service");
-    expect(log).toContain("systemctl start cachelane-litellm.service");
-    expect(log).toContain("systemctl start cachelane-healthcheck.service");
-    expect(log).toContain("systemctl start cachelane-healthcheck.timer");
+    expectRecoveryAfterLastHealthProbe(log);
   });
 
   it("executes the default launcher branch with the fixed detached command", () => {
@@ -260,6 +271,7 @@ describe("detached database maintenance worker", () => {
       "/usr/bin/sudo",
       "/usr/bin/systemd-run",
       "--unit=cachelane-db-maintenance",
+      "--collect",
       "--wait",
       "--property=Type=oneshot",
       harness.privilegedWorker,
@@ -295,10 +307,10 @@ describe("detached database maintenance worker", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      "/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker",
+      "/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker",
     );
     expect(result.stdout).not.toContain(harness.env.CACHELANE_INSTALL!);
     expect(result.stdout).not.toContain("--setenv=");
-    expect(result.stdout).not.toContain("--collect");
+    expect(result.stdout).toContain("--collect");
   });
 });
