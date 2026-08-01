@@ -13,6 +13,7 @@ import { classifyBlock } from "../classifier/index.js";
 import { compress } from "../compressor/index.js";
 import { CacheStateTracker } from "../orchestrator/index.js";
 import { logger } from "../logger/index.js";
+import { ProxyMetrics } from "./metrics.js";
 import { selectAdapter } from "../providers/registry.js";
 import type { ProviderAdapter } from "../providers/types.js";
 import type { AnthropicMessagesRequest, AnthropicMessage } from "../orchestrator/index.js";
@@ -588,6 +589,8 @@ export function createProxyServer(
   // and so an unusually slow backend can be accommodated without a rebuild.
   const idleTimeoutMs = opts.upstream_idle_timeout_ms ?? UPSTREAM_IDLE_TIMEOUT_MS;
 
+  const metrics = new ProxyMetrics(() => inflight);
+
   /**
    * Sockets currently carrying a response. `clientError` can fire on a socket
    * whose *previous*, perfectly valid pipelined request is still being answered
@@ -630,12 +633,22 @@ export function createProxyServer(
     res.on("close", releaseSocket);
 
     const pathForInflight = (req.url ?? "/").split("?")[0];
-    const countsAsWork = !(req.method === "GET" && pathForInflight === "/healthz");
+    // Operational endpoints are not request traffic. Counting them would inflate
+    // the very rate an alert is meant to watch, have /metrics observe itself,
+    // and — because the capacity check keys off the same flag — let liveness and
+    // observability be shed at exactly the moment they are most needed.
+    const isOperationalRoute =
+      req.method === "GET" && (pathForInflight === "/healthz" || pathForInflight === "/metrics");
+    const countsAsWork = !isOperationalRoute;
 
     // Shed load rather than accept work that cannot be held in memory. /healthz
     // is exempt: liveness must keep answering precisely when the proxy is
     // saturated, which is when the operator most needs to see it.
     if (countsAsWork && inflight >= MAX_INFLIGHT_REQUESTS) {
+      metrics.recordShed();
+      // A 503 is still a served request. Omitting it would understate both
+      // traffic and error rate at precisely the moment they matter.
+      metrics.recordRequest(503, 0);
       logger.warn(
         "rejected: at capacity",
         JSON.stringify({ inflight, limit: MAX_INFLIGHT_REQUESTS, path: pathForInflight }),
@@ -682,6 +695,7 @@ export function createProxyServer(
       const emitSpan = () => {
         if (spanEmitted) return;
         spanEmitted = true;
+        const totalMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
         logger.info(
           "request complete",
           JSON.stringify({
@@ -693,9 +707,10 @@ export function createProxyServer(
             // means the client went away or the stream was destroyed mid-flight.
             // Distinguishing them is what makes a silent SSE truncation visible.
             completed: res.writableFinished,
-            t_total_ms: Number(process.hrtime.bigint() - startedAt) / 1e6,
+            t_total_ms: totalMs,
           }),
         );
+        metrics.recordRequest(res.statusCode, totalMs / 1000, res.writableFinished);
       };
       res.on("finish", emitSpan);
       res.on("close", emitSpan);
@@ -720,6 +735,16 @@ export function createProxyServer(
           "content-length": String(response.length),
         });
         res.end(response);
+        return;
+      }
+
+      if (method === "GET" && pathOnly === "/metrics") {
+        const body = Buffer.from(metrics.render());
+        res.writeHead(200, {
+          "content-type": "text/plain; version=0.0.4; charset=utf-8",
+          "content-length": String(body.length),
+        });
+        res.end(body);
         return;
       }
 
@@ -946,6 +971,7 @@ export function createProxyServer(
 
           proxyAndRecord(upstream, method, reqPath, finalHeaders, forwardBody, res, {
             idleTimeoutMs,
+            metrics,
             db,
             adapter,
             workspaceId,
@@ -1063,6 +1089,7 @@ export function createProxyServer(
 
         proxyAndRecord(finalUpstream, method, reqPath, finalHeaders, forwardBody, res, {
             idleTimeoutMs,
+            metrics,
           db,
           adapter,
           workspaceId,
@@ -1119,6 +1146,7 @@ export function createProxyServer(
         }
         proxyAndRecord(fallbackUpstream, method, reqPath, fallbackHeaders, body, res, {
             idleTimeoutMs,
+            metrics,
           db,
           adapter,
           workspaceId,
@@ -1198,6 +1226,10 @@ export function createProxyServer(
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
   server.requestTimeout = REQUEST_TIMEOUT_MS;
+
+  // The event-loop monitor is a libuv handle; release it with the server that
+  // owns it so a closed proxy cannot keep the process alive.
+  server.once("close", () => metrics.stop());
 
   return server;
 }
@@ -1280,6 +1312,8 @@ interface RecordOptions {
   keepalivePings?: number;
   /** Upstream socket inactivity timeout in ms. See UPSTREAM_IDLE_TIMEOUT_MS. */
   idleTimeoutMs?: number;
+  /** Counters for upstream failures. Optional so tests can omit it. */
+  metrics?: ProxyMetrics;
 }
 
 function proxyAndRecord(
@@ -1349,6 +1383,7 @@ function proxyAndRecord(
   // request and goes silent no longer hangs the client forever with no error.
   const idleMs = recordOpts.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS;
   upstreamReq.setTimeout(idleMs, () => {
+    recordOpts.metrics?.recordUpstreamError("timeout");
     logger.error(
       "upstream idle timeout",
       JSON.stringify({ idle_ms: idleMs, headers_sent: res.headersSent }),
@@ -1369,6 +1404,7 @@ function proxyAndRecord(
   });
 
   upstreamReq.on("error", (err) => {
+    recordOpts.metrics?.recordUpstreamError("error");
     logger.error("upstream error", err.message, err);
     if (!res.headersSent) {
       res.writeHead(502, { "content-type": "application/json" });
