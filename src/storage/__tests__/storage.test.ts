@@ -107,8 +107,10 @@ describe("openDatabase", () => {
     const original = Database.prototype.pragma;
     let callCount = 0;
     Database.prototype.pragma = function (this: Database.Database, pragma: string) {
-      // Let journal_mode and foreign_keys pass; throw on integrity_check
-      if (pragma === "integrity_check" && callCount++ === 0) {
+      // Let journal_mode and foreign_keys pass; throw on the corruption check.
+      // Defaults to quick_check (see openDatabase); integrity_check is retained
+      // here so the assertion holds under CACHELANE_FULL_INTEGRITY_CHECK too.
+      if ((pragma === "quick_check" || pragma === "integrity_check") && callCount++ === 0) {
         throw new Error("SQLITE_ERROR: table 'blocks' already exists");
       }
       return original.call(this, pragma);
@@ -1116,4 +1118,106 @@ describe("openDatabase", () => {
     expect(row?.token_count).toBe(12);
   });
 
+});
+
+/**
+ * The corruption check at open.
+ *
+ * openDatabase ran a full `integrity_check` on every open — 227-389 ms on the
+ * production databases, paid by every process every time, and on the request
+ * path for the proxy. It also holds a long read lock, and with four processes
+ * opening the same file those overlapping read-marks starve WAL autocheckpoint:
+ * the Claude lane's WAL reached 45.3 MB against a ~4 MB threshold while the
+ * busier LiteLLM lane, with three times the blocks but half the readers, stayed
+ * ten times smaller.
+ */
+describe("openDatabase — corruption check", () => {
+  let dir: string;
+  const saved = process.env.CACHELANE_FULL_INTEGRITY_CHECK;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "cachelane-pragma-"));
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CACHELANE_FULL_INTEGRITY_CHECK;
+    else process.env.CACHELANE_FULL_INTEGRITY_CHECK = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Records which check pragmas were issued during an open. */
+  function pragmasDuringOpen(dbPath: string): string[] {
+    const original = Database.prototype.pragma;
+    const seen: string[] = [];
+    Database.prototype.pragma = function (this: Database.Database, pragma: string) {
+      if (pragma === "quick_check" || pragma === "integrity_check") seen.push(pragma);
+      return original.call(this, pragma);
+    };
+    try {
+      openDatabase(dbPath).close();
+      return seen;
+    } finally {
+      Database.prototype.pragma = original;
+    }
+  }
+
+  it("uses quick_check by default, not the exhaustive index cross-check", () => {
+    delete process.env.CACHELANE_FULL_INTEGRITY_CHECK;
+    const seen = pragmasDuringOpen(path.join(dir, "a.db"));
+    expect(seen).toContain("quick_check");
+    expect(seen).not.toContain("integrity_check");
+  });
+
+  it("restores the full check when explicitly asked, for investigating corruption", () => {
+    process.env.CACHELANE_FULL_INTEGRITY_CHECK = "1";
+    const seen = pragmasDuringOpen(path.join(dir, "b.db"));
+    expect(seen).toContain("integrity_check");
+    expect(seen).not.toContain("quick_check");
+  });
+
+  // The sentinel string is load-bearing: isCorruptionError classifies by message,
+  // so a check that reports corruption under a name the classifier does not know
+  // is rethrown instead of recovered — turning an auto-healing case into a hard
+  // startup failure.
+  it.each(["quick_check", "integrity_check"])(
+    "routes a failing %s into the corruption-recovery path",
+    (pragmaName) => {
+      process.env.CACHELANE_FULL_INTEGRITY_CHECK = pragmaName === "integrity_check" ? "1" : "0";
+      const dbPath = path.join(dir, `bad-${pragmaName}.db`);
+
+      const original = Database.prototype.pragma;
+      let reported = false;
+      Database.prototype.pragma = function (this: Database.Database, pragma: string) {
+        // Report corruption once, then behave normally so the recovery open works.
+        if (pragma === pragmaName && !reported) {
+          reported = true;
+          return [{ [pragmaName]: "*** in database main ***\nPage 3 is never used" }];
+        }
+        return original.call(this, pragma);
+      } as typeof Database.prototype.pragma;
+
+      let db;
+      try {
+        // Must recover rather than throw.
+        db = openDatabase(dbPath);
+        expect(db).toBeDefined();
+      } finally {
+        Database.prototype.pragma = original;
+        db?.close();
+      }
+
+      // The damaged file is preserved for inspection, not silently discarded.
+      const renamed = fs.readdirSync(dir).find((f) => f.startsWith(`bad-${pragmaName}.db.corrupt-`));
+      expect(renamed).toBeTruthy();
+    },
+  );
+
+  it("still opens a healthy database successfully under either mode", () => {
+    for (const mode of ["0", "1"]) {
+      process.env.CACHELANE_FULL_INTEGRITY_CHECK = mode;
+      const db = openDatabase(path.join(dir, `ok-${mode}.db`));
+      expect(db).toBeDefined();
+      db.close();
+    }
+  });
 });

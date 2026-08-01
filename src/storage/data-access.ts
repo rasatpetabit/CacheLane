@@ -265,12 +265,25 @@ export function openDatabase(dbPath: string): CachelaneDb {
   let rawDb;
   try {
     rawDb = tryOpen(dbPath);
-    const result = rawDb.pragma("integrity_check") as {
-      integrity_check: string;
-    }[];
-    if (result[0]?.integrity_check !== "ok") {
+    // `quick_check`, not `integrity_check`. The full check cross-verifies every
+    // index against its table and cost 227-389 ms per open on the production
+    // databases — paid by every process, every time, on the request path for the
+    // proxy. Worse, it holds a long read lock, and with four processes opening
+    // the same file (proxy plus MCP servers) those overlapping read-marks starve
+    // WAL autocheckpoint: the Claude lane's WAL reached 45.3 MB against a ~4 MB
+    // threshold while the busier LiteLLM lane, with three times the blocks but
+    // half the readers, stayed ten times smaller.
+    //
+    // quick_check still detects the page-level corruption this block exists to
+    // recover from; it skips only the index cross-checks. Set
+    // CACHELANE_FULL_INTEGRITY_CHECK=1 to restore the exhaustive check when
+    // actually investigating suspected corruption.
+    const full = process.env.CACHELANE_FULL_INTEGRITY_CHECK === "1";
+    const pragma = full ? "integrity_check" : "quick_check";
+    const result = rawDb.pragma(pragma) as Record<string, string>[];
+    if (result[0]?.[pragma] !== "ok") {
       rawDb.close();
-      throw new Error("integrity_check failed");
+      throw new Error(`${pragma} failed`);
     }
   } catch (err) {
     if (!isCorruptionError(err)) {

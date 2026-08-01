@@ -7,7 +7,12 @@ export function isCorruptionError(err: unknown): boolean {
   return (
     msg.includes("file is not a database") ||
     msg.includes("database disk image is malformed") ||
+    // Both spellings: openDatabase runs quick_check by default and
+    // integrity_check under CACHELANE_FULL_INTEGRITY_CHECK. Matching only the
+    // latter would mean a corrupt database detected by the default path was
+    // rethrown instead of recovered.
     msg.includes("integrity_check failed") ||
+    msg.includes("quick_check failed") ||
     msg.includes("sqlite_notadb") ||
     msg.includes("sqlite_corrupt")
   );
