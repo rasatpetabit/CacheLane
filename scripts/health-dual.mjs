@@ -27,7 +27,10 @@ async function httpProbe({ host, port, path, method = "GET", auth }) {
     headers["content-type"] = "application/json";
     headers["anthropic-version"] = "2023-06-01";
     headers["x-api-key"] = "invalid-probe-key";
-    body = JSON.stringify({ model: "probe", max_tokens: 1, messages: [{ role: "user", content: "x" }] });
+    // Use a real Anthropic model id so CacheLane's tokenizer/orchestrator does
+    // not warn about unsupported model "probe" on every install/health probe.
+    // Keep an invalid key so this remains a cheap path check, not a paid call.
+    body = JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 1, messages: [{ role: "user", content: "x" }] });
     headers["content-length"] = Buffer.byteLength(body);
   }
   const res = await fetch(`http://${host}:${port}${path}`, { method, headers, body: body || undefined });
