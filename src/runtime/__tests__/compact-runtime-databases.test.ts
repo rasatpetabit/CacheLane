@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 
 const maintenanceScriptPath = path.resolve("scripts/compact-runtime-databases.sh");
 const tempRoots: string[] = [];
@@ -16,6 +17,22 @@ afterEach(() => {
 interface Harness {
   logPath: string;
   env: NodeJS.ProcessEnv;
+  databasePaths: string[];
+  initialSizes: number[];
+}
+
+function createBloatedDatabase(databasePath: string): number {
+  const database = new Database(databasePath);
+  database.pragma("journal_mode = DELETE");
+  database.exec("CREATE TABLE payloads (id INTEGER PRIMARY KEY, body BLOB NOT NULL)");
+  const insert = database.prepare("INSERT INTO payloads (body) VALUES (?)");
+  const payload = Buffer.alloc(8_192, "x");
+  database.transaction(() => {
+    for (let index = 0; index < 256; index += 1) insert.run(payload);
+  })();
+  database.exec("DELETE FROM payloads");
+  database.close();
+  return fs.statSync(databasePath).size;
 }
 
 function makeHarness(failAction = ""): Harness {
@@ -26,18 +43,17 @@ function makeHarness(failAction = ""): Harness {
   const installDir = path.join(root, "runtime");
   const logPath = path.join(root, "commands.log");
   fs.mkdirSync(binDir, { recursive: true });
-  fs.mkdirSync(path.join(installDir, "node_modules", "better-sqlite3"), {
-    recursive: true,
-  });
-  fs.writeFileSync(
-    path.join(installDir, "node_modules", "better-sqlite3", "package.json"),
-    "{}\n",
+  fs.mkdirSync(path.join(installDir, "node_modules"), { recursive: true });
+  fs.symlinkSync(
+    path.resolve("node_modules/better-sqlite3"),
+    path.join(installDir, "node_modules", "better-sqlite3"),
+    "dir",
   );
 
   const claudeDb = path.join(root, "claude.db");
   const litellmDb = path.join(root, "litellm.db");
-  fs.writeFileSync(claudeDb, "fixture");
-  fs.writeFileSync(litellmDb, "fixture");
+  const databasePaths = [claudeDb, litellmDb];
+  const initialSizes = databasePaths.map(createBloatedDatabase);
 
   const fakeTool = path.join(binDir, "fake-tool");
   fs.writeFileSync(
@@ -51,6 +67,9 @@ case "$name" in
     if [[ "$*" == *"show -p User --value"* ]]; then
       printf '%s\\n' ras
     fi
+    if [[ -n "$CACHELANE_INACTIVE_UNIT" && "$*" == *"is-active --quiet $CACHELANE_INACTIVE_UNIT"* ]]; then
+      exit 3
+    fi
     ;;
   curl)
     if [[ "$CACHELANE_HEALTH_FAIL" == "1" ]]; then
@@ -62,34 +81,33 @@ case "$name" in
     if [[ -n "$CACHELANE_TEST_FAIL_ACTION" && "$*" == *"$CACHELANE_TEST_FAIL_ACTION"* ]]; then
       exit 42
     fi
-    ;;
-  sudo)
+    while [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done
+    [[ "$#" -gt 0 ]] && shift
     exec "$@"
-    ;;
-  systemd-run)
     ;;
 esac
 `,
     { mode: 0o755 },
   );
 
-  for (const name of ["systemctl", "curl", "runuser", "sudo", "systemd-run"]) {
+  for (const name of ["systemctl", "curl", "runuser"]) {
     fs.symlinkSync(fakeTool, path.join(binDir, name));
   }
 
   return {
     logPath,
+    databasePaths,
+    initialSizes,
     env: {
       ...process.env,
       CACHELANE_MAINTENANCE_TESTING: "1",
       CACHELANE_TEST_LOG: logPath,
       CACHELANE_TEST_FAIL_ACTION: failAction,
       CACHELANE_HEALTH_FAIL: "0",
+      CACHELANE_INACTIVE_UNIT: "",
       CACHELANE_SYSTEMCTL_BIN: path.join(binDir, "systemctl"),
       CACHELANE_CURL_BIN: path.join(binDir, "curl"),
       CACHELANE_RUNUSER_BIN: path.join(binDir, "runuser"),
-      CACHELANE_SUDO_BIN: path.join(binDir, "sudo"),
-      CACHELANE_SYSTEMD_RUN_BIN: path.join(binDir, "systemd-run"),
       CACHELANE_NODE_BIN: "/usr/bin/node",
       CACHELANE_INSTALL: installDir,
       CACHELANE_SERVICE_USER: "ras",
@@ -124,6 +142,18 @@ describe("detached database maintenance worker", () => {
     expect(log).toContain("systemctl start cachelane-healthcheck.timer");
   });
 
+  it("rejects inactive prerequisites without mutating service state", () => {
+    const harness = makeHarness();
+    harness.env.CACHELANE_INACTIVE_UNIT = "cachelane-claude.service";
+    const result = runWorker(harness.env);
+    const mutations = readLog(harness.logPath)
+      .split("\n")
+      .filter((line) => /^systemctl (?:start|stop) /.test(line));
+
+    expect(result.status).not.toBe(0);
+    expect(mutations).toEqual([]);
+  });
+
   it("maintains one lane at a time and runs the final healthcheck", () => {
     const harness = makeHarness();
     const result = runWorker(harness.env);
@@ -132,6 +162,15 @@ describe("detached database maintenance worker", () => {
     const stopLines = lines.filter((line) => line.startsWith("systemctl stop"));
 
     expect(result.status).toBe(0);
+    for (const [index, databasePath] of harness.databasePaths.entries()) {
+      const database = new Database(databasePath, { readonly: true });
+      expect(database.pragma("quick_check")).toEqual([{ quick_check: "ok" }]);
+      expect(database.pragma("freelist_count", { simple: true }) as number).toBe(0);
+      database.close();
+      const initialSize = harness.initialSizes[index];
+      if (initialSize === undefined) throw new Error("missing initial database size");
+      expect(fs.statSync(databasePath).size).toBeLessThan(initialSize);
+    }
     expect(stopLines).toContain("systemctl stop cachelane-healthcheck.timer");
     expect(stopLines).toContain("systemctl stop cachelane-healthcheck.service");
     expect(stopLines).toContain("systemctl stop cachelane-claude.service");
@@ -164,40 +203,18 @@ describe("detached database maintenance worker", () => {
     expect(log).toContain("systemctl start cachelane-healthcheck.timer");
   });
 
-  it("submits the installed worker to a detached transient systemd unit", () => {
+  it("prints a fixed privileged launch command with no caller-controlled paths", () => {
     const harness = makeHarness();
-    const installDir = harness.env.CACHELANE_INSTALL!;
-    const installedScript = path.join(
-      installDir,
-      "scripts",
-      "compact-runtime-databases.sh",
-    );
-    fs.mkdirSync(path.dirname(installedScript), { recursive: true });
-    fs.copyFileSync(maintenanceScriptPath, installedScript);
-    fs.chmodSync(installedScript, 0o755);
-
-    const result = spawnSync("bash", [maintenanceScriptPath], {
+    const result = spawnSync("bash", [maintenanceScriptPath, "--dry-run"], {
       env: harness.env,
       encoding: "utf8",
     });
-    const log = readLog(harness.logPath);
 
     expect(result.status).toBe(0);
-    expect(log).toContain(
-      "systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot",
+    expect(result.stdout).toContain(
+      "/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker",
     );
-    expect(log).toContain(`--setenv=CACHELANE_INSTALL=${installDir}`);
-    expect(log).toContain("--setenv=CACHELANE_SERVICE_USER=ras");
-    expect(log).toContain(
-      `--setenv=CACHELANE_CLAUDE_DB=${harness.env.CACHELANE_CLAUDE_DB}`,
-    );
-    expect(log).toContain(
-      `--setenv=CACHELANE_LITELLM_DB=${harness.env.CACHELANE_LITELLM_DB}`,
-    );
-    expect(log).toContain("--setenv=CACHELANE_NODE_BIN=/usr/bin/node");
-    expect(log).toContain("--setenv=CACHELANE_READY_TIMEOUT_SEC=0");
-    expect(log).not.toContain("--setenv=CACHELANE_SYSTEMCTL_BIN=");
-    expect(log).not.toContain("--setenv=CACHELANE_RUNUSER_BIN=");
-    expect(log).toContain(`${installedScript} --worker`);
+    expect(result.stdout).not.toContain(harness.env.CACHELANE_INSTALL!);
+    expect(result.stdout).not.toContain("--setenv=");
   });
 });

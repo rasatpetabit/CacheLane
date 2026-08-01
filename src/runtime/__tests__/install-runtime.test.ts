@@ -18,8 +18,11 @@ describe("install-runtime restart safety", () => {
     expect(installer).toContain("RuntimeDirectoryPreserve=yes");
   });
 
-  it("stages maintenance scripts without inlining compaction into deployment", () => {
+  it("installs a fixed root-owned maintenance worker without inlining compaction", () => {
     expect(installer).toContain('rsync -a "$REPO_ROOT/scripts/" "$STAGE/scripts/"');
+    expect(installer).toContain(
+      'sudo install -o root -g root -m 0755 "$REPO_ROOT/scripts/compact-runtime-databases.sh" /usr/local/sbin/cachelane-compact-runtime-databases',
+    );
     expect(installer).not.toContain("VACUUM");
   });
 

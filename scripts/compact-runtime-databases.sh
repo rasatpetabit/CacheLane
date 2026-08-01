@@ -1,22 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL="${CACHELANE_INSTALL:-/srv/cachelane}"
-SYSTEMCTL_BIN="${CACHELANE_SYSTEMCTL_BIN:-systemctl}"
-CURL_BIN="${CACHELANE_CURL_BIN:-curl}"
-RUNUSER_BIN="${CACHELANE_RUNUSER_BIN:-runuser}"
-SUDO_BIN="${CACHELANE_SUDO_BIN:-sudo}"
-SYSTEMD_RUN_BIN="${CACHELANE_SYSTEMD_RUN_BIN:-systemd-run}"
-NODE_BIN="${CACHELANE_NODE_BIN:-/usr/bin/node}"
-READY_TIMEOUT_SEC="${CACHELANE_READY_TIMEOUT_SEC:-30}"
-UNIT_NAME="${CACHELANE_MAINTENANCE_UNIT:-cachelane-db-maintenance}"
+TESTING="${CACHELANE_MAINTENANCE_TESTING:-0}"
+if [[ "$TESTING" == "1" ]]; then
+  INSTALL="${CACHELANE_INSTALL:-/srv/cachelane}"
+  SYSTEMCTL_BIN="${CACHELANE_SYSTEMCTL_BIN:-systemctl}"
+  CURL_BIN="${CACHELANE_CURL_BIN:-curl}"
+  RUNUSER_BIN="${CACHELANE_RUNUSER_BIN:-runuser}"
+  NODE_BIN="${CACHELANE_NODE_BIN:-/usr/bin/node}"
+  READY_TIMEOUT_SEC="${CACHELANE_READY_TIMEOUT_SEC:-30}"
+  SERVICE_USER="${CACHELANE_SERVICE_USER:-}"
+  CLAUDE_DB="${CACHELANE_CLAUDE_DB:-}"
+  LITELLM_DB="${CACHELANE_LITELLM_DB:-}"
+else
+  INSTALL=/srv/cachelane
+  SYSTEMCTL_BIN=/usr/bin/systemctl
+  CURL_BIN=/usr/bin/curl
+  RUNUSER_BIN=/usr/sbin/runuser
+  NODE_BIN=/usr/bin/node
+  READY_TIMEOUT_SEC=30
+  SERVICE_USER=""
+  CLAUDE_DB=""
+  LITELLM_DB=""
+fi
+
+SUDO_BIN=/usr/bin/sudo
+SYSTEMD_RUN_BIN=/usr/bin/systemd-run
+UNIT_NAME=cachelane-db-maintenance
+PRIVILEGED_WORKER=/usr/local/sbin/cachelane-compact-runtime-databases
 CLAUDE_SERVICE=cachelane-claude.service
 LITELLM_SERVICE=cachelane-litellm.service
 HEALTHCHECK_SERVICE=cachelane-healthcheck.service
 TIMER=cachelane-healthcheck.timer
-SERVICE_USER="${CACHELANE_SERVICE_USER:-}"
-CLAUDE_DB="${CACHELANE_CLAUDE_DB:-}"
-LITELLM_DB="${CACHELANE_LITELLM_DB:-}"
 
 recover() {
   local status="$1"
@@ -81,9 +96,19 @@ maintain_lane() {
   wait_for_health "$service" "$port"
 }
 
+require_active_prerequisites() {
+  local unit
+  for unit in "$CLAUDE_SERVICE" "$LITELLM_SERVICE" "$TIMER"; do
+    "$SYSTEMCTL_BIN" is-active --quiet "$unit" || {
+      echo "error: refusing maintenance because $unit is not active" >&2
+      return 1
+    }
+  done
+}
+
 run_worker() {
   local claude_user litellm_user home_dir
-  [[ "${EUID:-$(id -u)}" -eq 0 || "${CACHELANE_MAINTENANCE_TESTING:-0}" == "1" ]] || {
+  [[ "${EUID:-$(id -u)}" -eq 0 || "$TESTING" == "1" ]] || {
     echo "error: --worker must run as root" >&2
     return 1
   }
@@ -113,6 +138,7 @@ run_worker() {
     echo "error: required Node runtime is missing: $NODE_BIN" >&2
     return 1
   }
+  require_active_prerequisites
 
   trap 'recover $?' EXIT
   trap 'exit 130' INT
@@ -131,30 +157,47 @@ run_worker() {
   echo "CacheLane database maintenance completed successfully"
 }
 
-launch_worker() {
-  local worker="$INSTALL/scripts/compact-runtime-databases.sh"
-  [[ -x "$worker" ]] || {
-    echo "error: installed maintenance worker is missing: $worker" >&2
-    echo "deploy the current runtime with scripts/install-runtime.sh first" >&2
+print_launch_command() {
+  printf '%s\n' "$SUDO_BIN $SYSTEMD_RUN_BIN --unit=$UNIT_NAME --collect --wait --property=Type=oneshot $PRIVILEGED_WORKER --worker"
+}
+
+validate_privileged_worker() {
+  local path owner mode
+  for path in /usr/local/sbin "$PRIVILEGED_WORKER"; do
+    [[ -e "$path" ]] || {
+      echo "error: required privileged path is missing: $path" >&2
+      return 1
+    }
+    owner="$(/usr/bin/stat -c '%u' "$path")"
+    mode="$(/usr/bin/stat -c '%a' "$path")"
+    [[ "$owner" == "0" ]] || {
+      echo "error: privileged path is not root-owned: $path" >&2
+      return 1
+    }
+    (( (8#$mode & 0022) == 0 )) || {
+      echo "error: privileged path is group/world writable: $path" >&2
+      return 1
+    }
+  done
+  [[ -x "$PRIVILEGED_WORKER" ]] || {
+    echo "error: privileged worker is not executable: $PRIVILEGED_WORKER" >&2
     return 1
   }
+}
 
+launch_worker() {
+  validate_privileged_worker
   "$SUDO_BIN" "$SYSTEMD_RUN_BIN" \
     --unit="$UNIT_NAME" \
     --collect \
     --wait \
     --property=Type=oneshot \
-    --setenv=CACHELANE_INSTALL="$INSTALL" \
-    --setenv=CACHELANE_SERVICE_USER="$SERVICE_USER" \
-    --setenv=CACHELANE_CLAUDE_DB="$CLAUDE_DB" \
-    --setenv=CACHELANE_LITELLM_DB="$LITELLM_DB" \
-    --setenv=CACHELANE_NODE_BIN="$NODE_BIN" \
-    --setenv=CACHELANE_READY_TIMEOUT_SEC="$READY_TIMEOUT_SEC" \
-    "$worker" --worker
+    "$PRIVILEGED_WORKER" --worker
 }
 
 case "${1:-}" in
   --worker) run_worker ;;
+  --dry-run) print_launch_command ;;
   "") launch_worker ;;
-  *) echo "usage: $0 [--worker]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--dry-run|--worker]" >&2; exit 2 ;;
 esac

@@ -4,7 +4,7 @@
 
 **Goal:** Add a supported database-compaction command whose systemd-owned worker restores both CacheLane lanes and the healthcheck timer even when the initiating API session disconnects or maintenance fails.
 
-**Architecture:** `scripts/compact-runtime-databases.sh` has a launcher mode and a privileged `--worker` mode. The launcher submits the installed worker to a named transient systemd unit; the worker compacts one lane at a time and owns an unconditional recovery trap. Vitest drives the real shell script through injected fake executables so ordering and failure recovery are deterministic.
+**Architecture:** `scripts/compact-runtime-databases.sh` has a launcher mode and a privileged `--worker` mode. The launcher submits the fixed root-owned `/usr/local/sbin/cachelane-compact-runtime-databases` worker to a named transient systemd unit; the worker compacts one lane at a time and owns an unconditional recovery trap. Vitest drives the real shell script through fake service boundaries while executing real SQLite quick checks and VACUUM operations.
 
 **Tech Stack:** Bash 5, systemd/systemd-run, Node.js 22, better-sqlite3, Vitest, TypeScript.
 
@@ -15,14 +15,24 @@
 - Run database mutation as the lane service user, not root.
 - Do not terminate unrelated Claude Code, Pi, or MCP processes.
 - Add no npm dependencies.
-- Preserve `scripts/install-runtime.sh` as the deployment path; it already stages all files under `scripts/`.
+- Preserve `scripts/install-runtime.sh` as the deployment path; it stages the launcher and installs the privileged worker as `root:root` mode `0755`.
 - Every failure must remain non-zero after best-effort recovery.
+
+## Post-review security amendment
+
+This section is binding and supersedes earlier task snippets that used fake `sudo`, caller-controlled `systemd-run` paths, or a worker under `/srv/cachelane`.
+
+- The launcher uses fixed `/usr/bin/sudo`, `/usr/bin/systemd-run`, unit name `cachelane-db-maintenance`, and worker path `/usr/local/sbin/cachelane-compact-runtime-databases`.
+- No caller-controlled executable, install path, service user, database path, Node path, or timeout crosses into the root transient unit. Environment overrides are test-only for direct unprivileged `--worker` execution.
+- The launcher validates that `/usr/local/sbin` and the worker are root-owned and not group/world writable. `--dry-run` prints the fixed command without elevation.
+- The worker rejects an inactive lane or timer prerequisite before installing traps or mutating services; unconditional recovery therefore restores a known-active baseline.
+- The harness's fake `runuser` strips its user-selection arguments and executes the real embedded Node program against temporary SQLite databases. It asserts size/freelist reduction and `quick_check=ok`.
 
 ## File Structure
 
 - Create `scripts/compact-runtime-databases.sh`: launcher, systemd worker, one-lane maintenance flow, SQLite checks, and recovery trap.
 - Create `src/runtime/__tests__/compact-runtime-databases.test.ts`: isolated fake-command integration harness covering detached launch, ordering, and recovery.
-- Modify `src/runtime/__tests__/install-runtime.test.ts`: assert the installer stages the maintenance script through its canonical `scripts/` copy and does not inline database maintenance.
+- Modify `src/runtime/__tests__/install-runtime.test.ts`: assert the installer stages the launcher, installs the fixed root-owned worker, and does not inline database maintenance.
 
 ---
 
@@ -33,7 +43,7 @@
 - Create: `scripts/compact-runtime-databases.sh`
 
 **Interfaces:**
-- Consumes: environment overrides `CACHELANE_SYSTEMCTL_BIN`, `CACHELANE_CURL_BIN`, `CACHELANE_RUNUSER_BIN`, `CACHELANE_NODE_BIN`, `CACHELANE_INSTALL`, `CACHELANE_SERVICE_USER`, `CACHELANE_LITELLM_DB`, and `CACHELANE_CLAUDE_DB`.
+- Consumes in direct test mode only: `CACHELANE_SYSTEMCTL_BIN`, `CACHELANE_CURL_BIN`, `CACHELANE_RUNUSER_BIN`, `CACHELANE_NODE_BIN`, `CACHELANE_INSTALL`, `CACHELANE_SERVICE_USER`, `CACHELANE_LITELLM_DB`, and `CACHELANE_CLAUDE_DB`. Production worker execution ignores these overrides.
 - Produces: `scripts/compact-runtime-databases.sh --worker`, exiting `0` only after both lanes and the final healthcheck pass; any failure exits non-zero after recovery attempts.
 
 - [ ] **Step 1: Write the shell integration harness and failing recovery tests**
@@ -279,64 +289,25 @@ git commit -m "fix: make database maintenance recover lanes"
 
 ---
 
-### Task 2: Detached systemd launcher and complete acceptance harness
+### Task 2: Secure detached launcher and privileged worker installation
 
 **Files:**
 - Modify: `scripts/compact-runtime-databases.sh`
+- Modify: `scripts/install-runtime.sh`
 - Modify: `src/runtime/__tests__/compact-runtime-databases.test.ts`
 - Modify: `src/runtime/__tests__/install-runtime.test.ts`
 
 **Interfaces:**
-- Consumes: stable installed worker path `$CACHELANE_INSTALL/scripts/compact-runtime-databases.sh`.
-- Produces: default launcher invocation that runs `sudo systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot <installed-worker> --worker`.
+- Consumes: fixed launcher command `/usr/bin/sudo /usr/bin/systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot /usr/local/sbin/cachelane-compact-runtime-databases --worker`.
+- Produces: a root-owned worker at `/usr/local/sbin/cachelane-compact-runtime-databases`, a non-elevating `--dry-run`, inactive-prerequisite rejection, and real SQLite maintenance coverage.
 
-- [ ] **Step 1: Add failing detached-launch and health-failure tests**
+- [ ] **Step 1: Write failing privilege-boundary tests**
 
-Extend the fake tool harness with `sudo` and `systemd-run` symlinks. `sudo` must execute its arguments in the harness; `systemd-run` logs and exits `0`. Copy the source script into `$install/scripts/compact-runtime-databases.sh` for the launcher test.
+Assert that `--dry-run` prints the exact fixed command, contains no test install path, and contains no `--setenv`. Assert that `scripts/install-runtime.sh` contains:
 
-Add assertions:
-
-```ts
-it("submits the installed worker to a detached transient systemd unit", () => {
-  const harness = makeHarness();
-  const installedScript = path.join(harness.env.CACHELANE_INSTALL!, "scripts", "compact-runtime-databases.sh");
-  fs.mkdirSync(path.dirname(installedScript), { recursive: true });
-  fs.copyFileSync(script, installedScript);
-  fs.chmodSync(installedScript, 0o755);
-
-  const result = spawnSync("bash", [script], { env: harness.env, encoding: "utf8" });
-  const log = fs.readFileSync(harness.log, "utf8");
-
-  expect(result.status).toBe(0);
-  expect(log).toContain("systemd-run --unit=cachelane-db-maintenance --collect --wait --property=Type=oneshot");
-  expect(log).toContain(`${installedScript} --worker`);
-});
-
-it("returns non-zero and recovers every unit when a health gate fails", () => {
-  const harness = makeHarness();
-  harness.env.CACHELANE_HEALTH_FAIL = "1";
-  const result = runWorker(harness.env);
-  const log = fs.readFileSync(harness.log, "utf8");
-
-  expect(result.status).not.toBe(0);
-  expect(log).toContain("systemctl start cachelane-claude.service");
-  expect(log).toContain("systemctl start cachelane-litellm.service");
-  expect(log).toContain("systemctl start cachelane-healthcheck.timer");
-});
+```bash
+sudo install -o root -g root -m 0755 "$REPO_ROOT/scripts/compact-runtime-databases.sh" /usr/local/sbin/cachelane-compact-runtime-databases
 ```
-
-Make fake `curl` exit `22` when `CACHELANE_HEALTH_FAIL=1`.
-
-Add an installer boundary assertion:
-
-```ts
-it("stages maintenance scripts without inlining compaction into deployment", () => {
-  expect(installer).toContain('rsync -a "$REPO_ROOT/scripts/" "$STAGE/scripts/"');
-  expect(installer).not.toContain("VACUUM");
-});
-```
-
-- [ ] **Step 2: Run targeted tests and verify RED**
 
 Run:
 
@@ -344,70 +315,66 @@ Run:
 npm test -- src/runtime/__tests__/compact-runtime-databases.test.ts src/runtime/__tests__/install-runtime.test.ts
 ```
 
-Expected: detached-launch test fails because the script currently exits without invoking systemd-run. The health-failure test also fails until the fake health behavior is connected to the worker gate.
+Expected: FAIL because `--dry-run` and the root-owned install step do not exist.
 
-- [ ] **Step 3: Implement the launcher with explicit injectable command paths**
+- [ ] **Step 2: Implement fixed privileged paths**
 
-Add defaults:
-
-```bash
-SUDO_BIN="${CACHELANE_SUDO_BIN:-sudo}"
-SYSTEMD_RUN_BIN="${CACHELANE_SYSTEMD_RUN_BIN:-systemd-run}"
-UNIT_NAME="${CACHELANE_MAINTENANCE_UNIT:-cachelane-db-maintenance}"
-```
-
-Add:
+Use production constants that ignore caller environment overrides:
 
 ```bash
-launch_worker() {
-  local worker="$INSTALL/scripts/compact-runtime-databases.sh"
-  [[ -x "$worker" ]] || {
-    echo "error: installed maintenance worker is missing: $worker" >&2
-    echo "deploy the current runtime with scripts/install-runtime.sh first" >&2
-    return 1
-  }
-  "$SUDO_BIN" "$SYSTEMD_RUN_BIN" \
-    --unit="$UNIT_NAME" \
-    --collect \
-    --wait \
-    --property=Type=oneshot \
-    "$worker" --worker
-}
-
-case "${1:-}" in
-  --worker) run_worker ;;
-  "") launch_worker ;;
-  *) echo "usage: $0 [--worker]" >&2; exit 2 ;;
-esac
+SUDO_BIN=/usr/bin/sudo
+SYSTEMD_RUN_BIN=/usr/bin/systemd-run
+UNIT_NAME=cachelane-db-maintenance
+PRIVILEGED_WORKER=/usr/local/sbin/cachelane-compact-runtime-databases
 ```
 
-Do not pass test command overrides through `systemd-run`; the privileged worker must use production defaults. The fake `sudo`/`systemd-run` only exercises launcher argument construction in the unprivileged test process.
+Before default launch, require `/usr/local/sbin` and `$PRIVILEGED_WORKER` to be root-owned and not group/world writable. Submit only the fixed worker path. Keep path and command overrides inside `CACHELANE_MAINTENANCE_TESTING=1` direct-worker mode, which contains no sudo operation.
 
-- [ ] **Step 4: Run targeted tests and verify GREEN**
+- [ ] **Step 3: Verify privilege-boundary tests pass**
 
-Run:
+Run the two targeted test files again. Expected: all tests pass and the launcher output contains no caller-controlled paths.
 
-```bash
-npm test -- src/runtime/__tests__/compact-runtime-databases.test.ts src/runtime/__tests__/install-runtime.test.ts
+- [ ] **Step 4: Write the inactive-prerequisite regression test**
+
+Configure fake `systemctl is-active --quiet cachelane-claude.service` to fail. Assert worker exit is non-zero and the command log contains no `systemctl start` or `systemctl stop` mutation.
+
+Run the maintenance test. Expected: FAIL because the worker currently mutates service state before discovering the inactive lane.
+
+- [ ] **Step 5: Reject inactive prerequisites before mutation**
+
+Add `require_active_prerequisites` before trap installation and before stopping the timer. Require both lane services and the timer to be active. Run the targeted test and expect PASS.
+
+- [ ] **Step 6: Make the harness execute real SQLite**
+
+Create temporary SQLite databases with `better-sqlite3`, insert and delete 256 8-KiB blobs to create free pages, and record initial file sizes. The fake `runuser` must log, preserve forced-failure injection, strip `--user … --`, and `exec` the embedded Node command. After successful maintenance assert:
+
+```ts
+expect(database.pragma("quick_check")).toEqual([{ quick_check: "ok" }]);
+expect(database.pragma("freelist_count", { simple: true }) as number).toBe(0);
+expect(fs.statSync(databasePath).size).toBeLessThan(initialSize);
 ```
 
-Expected: all maintenance and installer tests pass.
+Run once before changing fake `runuser` and observe RED, then execute the real child command and observe GREEN.
 
-- [ ] **Step 5: Run shell static checks**
-
-Run:
+- [ ] **Step 7: Run targeted static and test checks**
 
 ```bash
 bash -n scripts/compact-runtime-databases.sh scripts/install-runtime.sh
+npm test -- src/runtime/__tests__/compact-runtime-databases.test.ts src/runtime/__tests__/install-runtime.test.ts
+npx eslint src/runtime/__tests__/compact-runtime-databases.test.ts src/runtime/__tests__/install-runtime.test.ts
 ```
 
-Expected: exit `0` with no output.
+Expected: every command exits `0`.
 
-- [ ] **Step 6: Commit detached launch behavior**
+- [ ] **Step 8: Commit the reviewed redesign**
 
 ```bash
-git add scripts/compact-runtime-databases.sh src/runtime/__tests__/compact-runtime-databases.test.ts src/runtime/__tests__/install-runtime.test.ts
-git commit -m "feat: detach CacheLane database compaction"
+git add scripts/compact-runtime-databases.sh scripts/install-runtime.sh \
+  src/runtime/__tests__/compact-runtime-databases.test.ts \
+  src/runtime/__tests__/install-runtime.test.ts \
+  docs/superpowers/specs/2026-08-01-detached-database-maintenance-design.md \
+  docs/superpowers/plans/2026-08-01-detached-database-maintenance.md
+git commit -m "fix: secure detached database maintenance"
 ```
 
 ---
@@ -416,7 +383,8 @@ git commit -m "feat: detach CacheLane database compaction"
 
 **Files:**
 - No source changes expected.
-- Installed artifact: `/srv/cachelane/scripts/compact-runtime-databases.sh`
+- Installed launcher: `/srv/cachelane/scripts/compact-runtime-databases.sh`
+- Privileged worker: `/usr/local/sbin/cachelane-compact-runtime-databases` (`root:root`, mode `0755`)
 
 **Interfaces:**
 - Consumes: committed script and tests from Tasks 1-2.
@@ -472,7 +440,9 @@ Run:
 ```bash
 test -x /srv/cachelane/scripts/compact-runtime-databases.sh
 bash -n /srv/cachelane/scripts/compact-runtime-databases.sh
-systemd-run --help | grep -F -- '--wait'
+sudo test -x /usr/local/sbin/cachelane-compact-runtime-databases
+sudo test "$(stat -c '%U:%G:%a' /usr/local/sbin/cachelane-compact-runtime-databases)" = root:root:755
+/usr/bin/systemd-run --help | grep -F -- '--wait'
 ```
 
 Expected: all commands exit `0`. Do not run live VACUUM as part of deployment verification.

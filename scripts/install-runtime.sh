@@ -227,8 +227,10 @@ TasksMax=256
 WantedBy=multi-user.target
 UNIT
 
-# Healthcheck (idempotent; canonical source is independently tested)
+# Root-owned operational workers. The database maintenance launcher must never
+# elevate a worker from the service-user-writable /srv/cachelane tree.
 sudo install -m 0755 "$REPO_ROOT/scripts/cachelane-healthcheck.sh" /usr/local/sbin/cachelane-healthcheck
+sudo install -o root -g root -m 0755 "$REPO_ROOT/scripts/compact-runtime-databases.sh" /usr/local/sbin/cachelane-compact-runtime-databases
 
 sudo tee "$UNIT_DIR/cachelane-healthcheck.service" >/dev/null <<'UNIT'
 [Unit]
