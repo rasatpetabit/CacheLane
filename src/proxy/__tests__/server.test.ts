@@ -13,6 +13,7 @@
 
 import http from "node:http";
 import net from "node:net";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -634,6 +635,95 @@ describe("proxy pipeline integration", () => {
       expect(String(byId.get("toolu_A")!.content)).toContain("[stub:");
       expect(String(byId.get("toolu_C")!.content)).toContain("[stub:");
       expect(byId.get("toolu_B")!.content).toBe("raw B contents");
+    });
+
+    /**
+     * Layer 2. `proxyAndRecord` used to take a single `body`, forward it, and
+     * hand that same buffer to `extractAndInsertToolResults` — so with mutation
+     * on, the recorder ingested CacheLane's own stubs as if the client had sent
+     * them. The ledger stored the transform's output as its input.
+     *
+     * The forwarded body is checked in the test above; this one checks what was
+     * recorded. `content_hash` is the discriminator: it is sha256 of whatever
+     * text the recorder saw, so it says unambiguously which buffer arrived.
+     */
+    it("records the client's tool output, not the stub it forwarded upstream", async () => {
+      const seedDb = openDatabase(dbPath);
+      const now = Date.now();
+      for (const id of ["toolu_A", "toolu_C"]) {
+        seedDb.insertBlock({
+          id,
+          workspace_id: "test-ws",
+          session_id: "test-session",
+          content_hash: id.padEnd(64, "0").slice(0, 64),
+          kind: "tool_output",
+          volatility: "VOLATILE",
+          is_pinned: false,
+          token_count: 250,
+          added_at_turn: 1,
+          last_referenced_at_turn: 1,
+          unused_turns: 3,
+          is_stub: false,
+          stub_summary: null,
+          refetch_handle: `tool:read:${id}`,
+          restored_at_turn: null,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+      seedDb.close();
+
+      const request: AnthropicMessagesRequest = {
+        model: "claude-opus-4-7",
+        system: [{ type: "text", text: "System." }],
+        tools: [{ name: "Read", input_schema: { type: "object" } }],
+        messages: [
+          { role: "user", content: [{ type: "text", text: "read files" }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "toolu_A", name: "Read", input: {} },
+              { type: "tool_use", id: "toolu_B", name: "Read", input: {} },
+              { type: "tool_use", id: "toolu_C", name: "Read", input: {} },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "toolu_A", content: "raw A contents" },
+              { type: "tool_result", tool_use_id: "toolu_B", content: "raw B contents" },
+              { type: "tool_result", tool_use_id: "toolu_C", content: "raw C contents" },
+            ],
+          },
+        ],
+        max_tokens: 1024,
+      };
+
+      await postMessages(proxyPort, JSON.stringify(request));
+      await waitForTurn(dbPath, "test-session");
+
+      // The forwarded body really did carry a stub for A — otherwise this test
+      // would pass vacuously, proving nothing about which buffer was recorded.
+      const forwarded = JSON.parse(lastCaptured!.body) as AnthropicMessagesRequest;
+      const forwardedA = (forwarded.messages[2]!.content as { tool_use_id?: string; content?: unknown }[])
+        .find((c) => c.tool_use_id === "toolu_A");
+      expect(String(forwardedA!.content)).toContain("[stub:");
+
+      const db = openDatabase(dbPath);
+      try {
+        const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+        for (const [id, original] of [
+          ["toolu_A", "raw A contents"],
+          ["toolu_B", "raw B contents"],
+          ["toolu_C", "raw C contents"],
+        ] as const) {
+          const row = db.getBlock(id, "test-session");
+          expect(row, `block ${id} was never recorded`).not.toBeNull();
+          expect(row!.content_hash, `block ${id} recorded the forwarded body`).toBe(sha(original));
+        }
+      } finally {
+        db.close();
+      }
     });
   });
 

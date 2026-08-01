@@ -14,6 +14,7 @@ import { compress } from "../compressor/index.js";
 import { CacheStateTracker } from "../orchestrator/index.js";
 import { logger } from "../logger/index.js";
 import { ProxyMetrics } from "./metrics.js";
+import { asForwardBody, asOriginalBody, type ForwardBody, type OriginalBody } from "./body-types.js";
 import { selectAdapter } from "../providers/registry.js";
 import type { ProviderAdapter } from "../providers/types.js";
 import type { AnthropicMessagesRequest, AnthropicMessage } from "../orchestrator/index.js";
@@ -860,9 +861,11 @@ export function createProxyServer(
             middle_hash: null,
           });
           const actuallyMutate = config.features.mutation_enabled;
-          const forwardBody = actuallyMutate
-            ? Buffer.from(JSON.stringify(adapter.denormalize(hinted)), "utf-8")
-            : body;
+          const forwardBody = asForwardBody(
+            actuallyMutate
+              ? Buffer.from(JSON.stringify(adapter.denormalize(hinted)), "utf-8")
+              : body,
+          );
 
           const finalSignals = ["provider:openai-chat"];
           if (prunedCount > 0) finalSignals.push(`pruned:${prunedCount}`);
@@ -972,6 +975,8 @@ export function createProxyServer(
           proxyAndRecord(upstream, method, reqPath, finalHeaders, forwardBody, res, {
             idleTimeoutMs,
             metrics,
+            // Always the client's bytes: never forwardBody.
+            originalBody: asOriginalBody(body),
             db,
             adapter,
             workspaceId,
@@ -1041,9 +1046,11 @@ export function createProxyServer(
         });
 
         const actuallyMutate = config.features.mutation_enabled && (compressionMutated || result.mutated);
-        const forwardBody = actuallyMutate
-          ? Buffer.from(JSON.stringify(result.request), "utf-8")
-          : body;
+        const forwardBody = asForwardBody(
+          actuallyMutate
+            ? Buffer.from(JSON.stringify(result.request), "utf-8")
+            : body,
+        );
 
         if (compressionResult.events.length > 0 && actuallyMutate) {
           try {
@@ -1090,6 +1097,8 @@ export function createProxyServer(
         proxyAndRecord(finalUpstream, method, reqPath, finalHeaders, forwardBody, res, {
             idleTimeoutMs,
             metrics,
+          // Always the client's bytes: never forwardBody.
+          originalBody: asOriginalBody(body),
           db,
           adapter,
           workspaceId,
@@ -1144,9 +1153,11 @@ export function createProxyServer(
             );
           }
         }
-        proxyAndRecord(fallbackUpstream, method, reqPath, fallbackHeaders, body, res, {
+        proxyAndRecord(fallbackUpstream, method, reqPath, fallbackHeaders, asForwardBody(body), res, {
             idleTimeoutMs,
             metrics,
+          // Always the client's bytes: never forwardBody.
+          originalBody: asOriginalBody(body),
           db,
           adapter,
           workspaceId,
@@ -1314,6 +1325,14 @@ interface RecordOptions {
   idleTimeoutMs?: number;
   /** Counters for upstream failures. Optional so tests can omit it. */
   metrics?: ProxyMetrics;
+  /**
+   * The client's own request bytes — what gets recorded.
+   *
+   * Separate from the forwarded body, and a distinct nominal type, because
+   * these two used to be one parameter: the recorder was handed the mutated
+   * buffer and ingested CacheLane's own stubs as if the client had sent them.
+   */
+  originalBody: OriginalBody;
 }
 
 function proxyAndRecord(
@@ -1321,7 +1340,7 @@ function proxyAndRecord(
   method: string,
   path: string,
   headers: Record<string, string>,
-  body: Buffer,
+  body: ForwardBody,
   res: http.ServerResponse,
   recordOpts: RecordOptions,
 ): void {
@@ -1335,7 +1354,9 @@ function proxyAndRecord(
     if (status === "recorded") {
       const responseBody = Buffer.concat(responseChunks);
       recordUsageFromResponse(responseBody, recordOpts, responseContentType);
-      extractAndInsertToolResults(body, recordOpts);
+      // The client's bytes, never the forwarded ones — recording the forwarded
+      // body would store our own stubs as if they were the tool output.
+      extractAndInsertToolResults(recordOpts.originalBody, recordOpts);
     }
     // DB lifetime is owned by the caller (startProxy or tryBindProxy);
     // do NOT close here.
@@ -1578,7 +1599,7 @@ function recordMissingUsage(opts: RecordOptions): void {
   }
 }
 
-function extractAndInsertToolResults(body: Buffer, opts: RecordOptions): void {
+function extractAndInsertToolResults(body: OriginalBody, opts: RecordOptions): void {
   if (opts.adapter?.name === "openai-chat") {
     extractAndInsertToolResultsOpenAI(body, opts);
     return;
@@ -1640,7 +1661,7 @@ function extractAndInsertToolResults(body: Buffer, opts: RecordOptions): void {
 // OpenAI chat: tool outputs are whole role:"tool" messages keyed by
 // tool_call_id. Mirrors the Anthropic extractor — one block row per tool
 // output, so the K-pruner ages and stubs them identically across providers.
-function extractAndInsertToolResultsOpenAI(body: Buffer, opts: RecordOptions): void {
+function extractAndInsertToolResultsOpenAI(body: OriginalBody, opts: RecordOptions): void {
   try {
     const req = JSON.parse(body.toString("utf-8")) as {
       messages?: Array<{ role?: unknown; tool_call_id?: unknown; content?: unknown }>;
