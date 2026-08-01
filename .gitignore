@@ -19,3 +19,6 @@ benchmark/runs/*
 src/reference-detector/__tests__/corpus/corpus-02[1-9].json
 src/reference-detector/__tests__/corpus/corpus-0[3-9][0-9].json
 src/reference-detector/__tests__/corpus/corpus-100.json
+
+# Local git worktrees
+.worktrees/
