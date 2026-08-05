@@ -76,16 +76,30 @@ Rows without an exact transcript match remain **untouched**.
    #   <projects-root>/<encoded-workspace>/<session_id>.jsonl
    ```
 
-4. Inventory candidate historical hook rows **without writing**. Use `json_each` exact equality for `mode:hook`; do **not** use `LIKE '%mode:hook%'` (it can false-match nested text). Quarantine malformed or non-array `signals` into a separate report — those rows are **not** write candidates until a human decides how to handle them:
+4. Inventory candidate historical hook rows **without writing**. Use `json_each` exact equality for `mode:hook`; do **not** use `LIKE '%mode:hook%'` (it can false-match nested text). Quarantine malformed or non-array `signals` into a separate report — those rows are **not** write candidates until a human decides how to handle them.
+
+   **SQL safety for `signals`:** never call bare `json_type(signals)` (or `json_each(signals)`) on rows that may contain malformed JSON. SQLite may evaluate `json_type(...)` even when a sibling `json_valid(...)` predicate is present in `AND`/`OR` chains and raise `malformed JSON`. Guard every `json_type` with `CASE WHEN json_valid(...) THEN json_type(...) END` (or equivalent CTE normalization). Only feed `json_each` after that guard has proven the value is a JSON array.
 
    ```bash
    sqlite3 "$CLAUDE_DB" "
+     -- Normalize type once; bare json_type(signals) is forbidden on untrusted text.
+     WITH typed AS (
+       SELECT
+         t.id,
+         t.session_id,
+         t.provider,
+         t.signals,
+         CASE
+           WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+           THEN json_type(t.signals)
+         END AS signals_json_type
+       FROM turns t
+     )
      -- Valid candidates: signals is a JSON array that contains the exact element mode:hook
      SELECT COUNT(*) AS candidate_hook_rows
-     FROM turns t
+     FROM typed t
      WHERE t.provider = 'anthropic'
-       AND json_valid(t.signals)
-       AND json_type(t.signals) = 'array'
+       AND t.signals_json_type = 'array'
        AND EXISTS (
          SELECT 1
          FROM json_each(t.signals) je
@@ -93,29 +107,92 @@ Rows without an exact transcript match remain **untouched**.
        );
 
      -- Quarantine: missing/null, non-JSON, or JSON that is not an array
+     -- (signals_json_type IS NULL covers NULL and invalid JSON; != 'array' covers objects/scalars)
      SELECT COUNT(*) AS quarantine_malformed_or_non_array_signals
-     FROM turns t
+     FROM typed t
      WHERE t.provider = 'anthropic'
        AND (
          t.signals IS NULL
-         OR NOT json_valid(t.signals)
-         OR json_type(t.signals) != 'array'
+         OR t.signals_json_type IS NULL
+         OR t.signals_json_type != 'array'
        );
 
      -- Optional detail for the quarantine report (read-only)
-     SELECT t.id, t.session_id, t.signals
-     FROM turns t
+     SELECT t.id, t.session_id, t.signals, t.signals_json_type
+     FROM typed t
      WHERE t.provider = 'anthropic'
        AND (
          t.signals IS NULL
-         OR NOT json_valid(t.signals)
-         OR json_type(t.signals) != 'array'
+         OR t.signals_json_type IS NULL
+         OR t.signals_json_type != 'array'
        )
      LIMIT 50;
    "
    ```
 
+   Equivalent inline guard (when a CTE is inconvenient):
+
+   ```sql
+   CASE WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+        THEN json_type(t.signals)
+   END = 'array'
+   ```
+
    **Classification note:** only the `json_each` exact-equality set may enter Phase 3 preview as hook candidates. Quarantined malformed/non-array rows must be listed separately and stay out of the matched write set unless a later, explicitly authorized procedure defines a different recovery path for them.
+
+5. **Read-only smoke (in-memory / temp table only — not the live DB).** Before trusting the inventory SQL on a real file, prove the candidate and quarantine queries return counts without error on valid-array, malformed, and non-array JSON. This check is documentation verification only; it does **not** touch `~/.cachelane-claude/cachelane.db`.
+
+   ```bash
+   # Requires the sqlite3 CLI. Uses :memory: only — never point this at a live lane DB.
+   sqlite3 :memory: <<'SQL'
+   CREATE TABLE turns (
+     id INTEGER,
+     session_id TEXT,
+     provider TEXT,
+     signals TEXT
+   );
+   INSERT INTO turns VALUES
+     (1, 's-valid',   'anthropic', '["mode:hook"]'),   -- valid array candidate
+     (2, 's-bad',     'anthropic', 'not-json'),        -- malformed JSON
+     (3, 's-object',  'anthropic', '{"a":1}'),         -- valid JSON, non-array
+     (4, 's-null',    'anthropic', NULL),              -- null signals
+     (5, 's-other',   'anthropic', '["other"]');       -- array without mode:hook
+
+   -- Forbidden pattern (illustrative): bare json_type on malformed text raises.
+   -- Uncomment to observe: SELECT json_type(signals) FROM turns WHERE id = 2;
+
+   WITH typed AS (
+     SELECT
+       t.*,
+       CASE
+         WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+         THEN json_type(t.signals)
+       END AS signals_json_type
+     FROM turns t
+   )
+   SELECT
+     (SELECT COUNT(*) FROM typed t
+       WHERE t.provider = 'anthropic'
+         AND t.signals_json_type = 'array'
+         AND EXISTS (
+           SELECT 1 FROM json_each(t.signals) je WHERE je.value = 'mode:hook'
+         )
+     ) AS candidate_hook_rows,
+     (SELECT COUNT(*) FROM typed t
+       WHERE t.provider = 'anthropic'
+         AND (
+           t.signals IS NULL
+           OR t.signals_json_type IS NULL
+           OR t.signals_json_type != 'array'
+         )
+     ) AS quarantine_malformed_or_non_array_signals;
+   -- Expected one-line result: 1|3
+   -- (1 candidate with mode:hook; 3 quarantine: malformed + object + NULL)
+   -- Exit status must be 0 with no "malformed JSON" error.
+   SQL
+   ```
+
+   Success criteria for the smoke: process exit `0`, printed counts `1|3` (or equivalent column labels with those values), and **no** `malformed JSON` error. If the smoke fails, do not run the inventory against a real DB until the SQL guards match this pattern.
 
 Stop here if you only needed an inventory. The remainder of this document is a future operator procedure.
 
