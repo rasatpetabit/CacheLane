@@ -41,21 +41,44 @@ function readCacheCreationTiers(
     };
   }
 
-  // Legacy top-level fields. Prefer explicit tier fields. Map total
-  // cache_creation_input_tokens into historical 5m only when neither
-  // explicit 5m nor explicit 1h tier is present (avoids total+1h double-count).
+  // Legacy top-level fields. Prefer explicit tier fields.
+  // - No explicit tiers: total → historical 5m fallback.
+  // - Exactly one explicit tier: derive the missing tier as
+  //   max(0, total - explicitTier) so mixed total+1h / total+5m shapes
+  //   do not undercount or double-count.
+  // - Both explicit: use both as-is (total is ignored).
   const explicitFiveMinute =
     usage.ephemeral_5m_input_tokens ?? usage.cache_creation_5m_tokens;
   const explicitOneHour =
     usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens;
-  const hasExplicitTier =
-    explicitFiveMinute !== undefined || explicitOneHour !== undefined;
+  const hasExplicitFiveMinute = explicitFiveMinute !== undefined;
+  const hasExplicitOneHour = explicitOneHour !== undefined;
+  const total = asNumber(usage.cache_creation_input_tokens);
 
-  const fiveMinute = asNumber(
-    hasExplicitTier ? explicitFiveMinute : usage.cache_creation_input_tokens,
-  );
-  const oneHour = asNumber(explicitOneHour);
-  return { fiveMinute, oneHour };
+  if (!hasExplicitFiveMinute && !hasExplicitOneHour) {
+    return { fiveMinute: total, oneHour: 0 };
+  }
+
+  if (hasExplicitFiveMinute && !hasExplicitOneHour) {
+    const fiveMinute = asNumber(explicitFiveMinute);
+    return {
+      fiveMinute,
+      oneHour: Math.max(0, total - fiveMinute),
+    };
+  }
+
+  if (!hasExplicitFiveMinute && hasExplicitOneHour) {
+    const oneHour = asNumber(explicitOneHour);
+    return {
+      fiveMinute: Math.max(0, total - oneHour),
+      oneHour,
+    };
+  }
+
+  return {
+    fiveMinute: asNumber(explicitFiveMinute),
+    oneHour: asNumber(explicitOneHour),
+  };
 }
 
 /**

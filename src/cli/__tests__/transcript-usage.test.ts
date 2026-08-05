@@ -149,6 +149,146 @@ describe("parseTranscriptApiCalls", () => {
     },
   );
 
+  test.each([
+    {
+      name: "total+explicit 1h derives missing 5m",
+      total: 5_000,
+      fiveMinuteField: undefined as string | undefined,
+      fiveMinuteValue: undefined as number | undefined,
+      oneHourField: "ephemeral_1h_input_tokens" as const,
+      oneHourValue: 4_000,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "total+explicit 1h (cache_creation_1h_tokens) derives missing 5m",
+      total: 5_000,
+      fiveMinuteField: undefined as string | undefined,
+      fiveMinuteValue: undefined as number | undefined,
+      oneHourField: "cache_creation_1h_tokens" as const,
+      oneHourValue: 4_000,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "total+explicit 5m derives missing 1h",
+      total: 5_000,
+      fiveMinuteField: "ephemeral_5m_input_tokens" as const,
+      fiveMinuteValue: 1_000,
+      oneHourField: undefined as string | undefined,
+      oneHourValue: undefined as number | undefined,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "total+explicit 5m (cache_creation_5m_tokens) derives missing 1h",
+      total: 5_000,
+      fiveMinuteField: "cache_creation_5m_tokens" as const,
+      fiveMinuteValue: 1_000,
+      oneHourField: undefined as string | undefined,
+      oneHourValue: undefined as number | undefined,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 4_000,
+    },
+  ])(
+    "derives missing tier from total when exactly one explicit tier exists ($name)",
+    ({
+      name,
+      total,
+      fiveMinuteField,
+      fiveMinuteValue,
+      oneHourField,
+      oneHourValue,
+      expectedFiveMinute,
+      expectedOneHour,
+    }) => {
+      const usage: Record<string, unknown> = {
+        input_tokens: 2,
+        output_tokens: 18,
+        cache_creation_input_tokens: total,
+        cache_read_input_tokens: 40_000,
+      };
+      if (fiveMinuteField !== undefined) {
+        usage[fiveMinuteField] = fiveMinuteValue;
+      }
+      if (oneHourField !== undefined) {
+        usage[oneHourField] = oneHourValue;
+      }
+
+      const content = assistantLine({
+        id: `msg_derive_${name.replace(/\s+/g, "_")}`,
+        usage,
+        timestamp: "2026-08-04T01:44:56.194Z",
+      });
+
+      const calls = parseTranscriptApiCalls(content, FALLBACK_MS);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.cache_creation_5m_tokens).toBe(expectedFiveMinute);
+      expect(calls[0]!.cache_creation_1h_tokens).toBe(expectedOneHour);
+    },
+  );
+
+  test.each([
+    {
+      name: "total smaller than explicit 1h",
+      total: 1_000,
+      fiveMinuteField: undefined as string | undefined,
+      fiveMinuteValue: undefined as number | undefined,
+      oneHourField: "ephemeral_1h_input_tokens" as const,
+      oneHourValue: 4_000,
+      expectedFiveMinute: 0,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "total smaller than explicit 5m",
+      total: 500,
+      fiveMinuteField: "ephemeral_5m_input_tokens" as const,
+      fiveMinuteValue: 1_000,
+      oneHourField: undefined as string | undefined,
+      oneHourValue: undefined as number | undefined,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 0,
+    },
+  ])(
+    "never creates negative tokens when total is smaller than explicit tier ($name)",
+    ({
+      name,
+      total,
+      fiveMinuteField,
+      fiveMinuteValue,
+      oneHourField,
+      oneHourValue,
+      expectedFiveMinute,
+      expectedOneHour,
+    }) => {
+      const usage: Record<string, unknown> = {
+        input_tokens: 2,
+        output_tokens: 18,
+        cache_creation_input_tokens: total,
+        cache_read_input_tokens: 40_000,
+      };
+      if (fiveMinuteField !== undefined) {
+        usage[fiveMinuteField] = fiveMinuteValue;
+      }
+      if (oneHourField !== undefined) {
+        usage[oneHourField] = oneHourValue;
+      }
+
+      const content = assistantLine({
+        id: `msg_no_neg_${name.replace(/\s+/g, "_")}`,
+        usage,
+        timestamp: "2026-08-04T01:44:56.194Z",
+      });
+
+      const calls = parseTranscriptApiCalls(content, FALLBACK_MS);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.cache_creation_5m_tokens).toBe(expectedFiveMinute);
+      expect(calls[0]!.cache_creation_1h_tokens).toBe(expectedOneHour);
+      expect(calls[0]!.cache_creation_5m_tokens).toBeGreaterThanOrEqual(0);
+      expect(calls[0]!.cache_creation_1h_tokens).toBeGreaterThanOrEqual(0);
+    },
+  );
+
   test("skips malformed JSONL lines", () => {
     const content = [
       "{not-json",
