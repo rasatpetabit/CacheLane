@@ -41,16 +41,20 @@ function readCacheCreationTiers(
     };
   }
 
-  // Legacy top-level fields. Prefer explicit tier fields; when only a total
-  // exists, retain the historical five-minute fallback for older formats.
+  // Legacy top-level fields. Prefer explicit tier fields. Map total
+  // cache_creation_input_tokens into historical 5m only when neither
+  // explicit 5m nor explicit 1h tier is present (avoids total+1h double-count).
+  const explicitFiveMinute =
+    usage.ephemeral_5m_input_tokens ?? usage.cache_creation_5m_tokens;
+  const explicitOneHour =
+    usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens;
+  const hasExplicitTier =
+    explicitFiveMinute !== undefined || explicitOneHour !== undefined;
+
   const fiveMinute = asNumber(
-    usage.ephemeral_5m_input_tokens ??
-      usage.cache_creation_5m_tokens ??
-      usage.cache_creation_input_tokens,
+    hasExplicitTier ? explicitFiveMinute : usage.cache_creation_input_tokens,
   );
-  const oneHour = asNumber(
-    usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens,
-  );
+  const oneHour = asNumber(explicitOneHour);
   return { fiveMinute, oneHour };
 }
 

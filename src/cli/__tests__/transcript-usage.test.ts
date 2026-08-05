@@ -117,6 +117,38 @@ describe("parseTranscriptApiCalls", () => {
     expect(calls[0]!.cache_read_tokens).toBe(40_000);
   });
 
+  test.each([
+    {
+      name: "ephemeral_1h_input_tokens",
+      oneHourField: "ephemeral_1h_input_tokens" as const,
+    },
+    {
+      name: "cache_creation_1h_tokens",
+      oneHourField: "cache_creation_1h_tokens" as const,
+    },
+  ])(
+    "does not map total into 5m when only explicit 1h exists ($name)",
+    ({ oneHourField }) => {
+      const content = assistantLine({
+        id: `msg_legacy_total_plus_${oneHourField}`,
+        usage: {
+          input_tokens: 2,
+          output_tokens: 18,
+          cache_creation_input_tokens: 4_000,
+          cache_read_input_tokens: 40_000,
+          [oneHourField]: 4_000,
+        },
+        timestamp: "2026-08-04T01:44:56.194Z",
+      });
+
+      const calls = parseTranscriptApiCalls(content, FALLBACK_MS);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.cache_creation_5m_tokens).toBe(0);
+      expect(calls[0]!.cache_creation_1h_tokens).toBe(4_000);
+      expect(calls[0]!.cache_read_tokens).toBe(40_000);
+    },
+  );
+
   test("skips malformed JSONL lines", () => {
     const content = [
       "{not-json",
