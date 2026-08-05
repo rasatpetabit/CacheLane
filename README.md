@@ -34,7 +34,7 @@ cachelane install
 
 ```bash
 cachelane doctor                  # health check: node, config, db, mcp, hooks
-cachelane sessions                # list recorded sessions + cache savings
+cachelane sessions                # list recorded sessions + observed provider reuse / estimated savings
 cachelane stats --scope session   # stats for the current project's latest session
 ```
 
@@ -222,7 +222,7 @@ CacheLane records every turn under a **workspace** derived from the directory Cl
 - `cachelane stats --scope session`: the most recent session **in the current project** (run it from your project dir). With no `--session-id`, it auto-selects the latest session.
 - `cachelane stats --scope workspace`: all sessions for the current project.
 - `cachelane stats --scope all`: everything, across all projects.
-- `cachelane sessions`: a table of every recorded session with hit ratio and savings, across all projects.
+- `cachelane sessions`: a table of every recorded session with observed provider cache reuse and estimated provider input-cost savings, across all projects.
 
 Most of the time you won't need flags. Just run `cachelane stats` from your project directory. To target a specific session explicitly (for example one from another project), pass its id from `cachelane sessions`:
 
@@ -233,6 +233,8 @@ cachelane stats --scope all --session-id <session-id>
 Sessions are keyed by Claude Code's own session id, so the value in the `cachelane sessions` table is exactly what `--session-id` expects.
 
 For the local dual-lane installation, run `node scripts/stats-dual.mjs`. Treat its `token_reuse_index` as a provider-normalized reuse ratio, not USD savings. LiteLLM's OpenAI-style cached-token fields may reflect provider automatic caching; they do not prove CacheLane's Anthropic marker planner is effective. Controlled Claude conformance and three-arm measurement procedures are in [`docs/runbook-claude-effectiveness.md`](docs/runbook-claude-effectiveness.md).
+
+Historical Claude hook telemetry rows are **not** automatically rewritten by the future-path fixes. A safe, human-authorized exact-match repair procedure (preview, backup, transaction, invariants, rollback) is documented in [`docs/operations/cachelane-hook-stats-repair.md`](docs/operations/cachelane-hook-stats-repair.md). That runbook does not claim historical data has already been repaired.
 
 ### Per-block cost attribution (`explain --top-blocks`)
 
@@ -295,7 +297,7 @@ The region totals at the bottom reconcile exactly to the authoritative `usage` o
 | `cachelane uninstall [--purge]` | Remove the integration. `--purge` also deletes `~/.cachelane` (config + database). |
 | `cachelane doctor [--json]` | Health check: Node version, config, SQLite writability, MCP + hook registration. |
 | `cachelane stats [--scope session\\|workspace\\|all] [--json]` | Usage events, observed provider cache reuse, pruned blocks, and estimated provider input-cost savings. |
-| `cachelane sessions [--json]` | List all recorded sessions with hit ratio and savings. |
+| `cachelane sessions [--json]` | List all recorded sessions with observed provider cache reuse and estimated provider input-cost savings. |
 | `cachelane report [--scope session\\|workspace\\|all]` | Generate and open a self-contained HTML dashboard webpage of your savings. |
 | `cachelane explain [--turn <N>] [--top-blocks [N]] [--json]` | Show how CacheLane classified and pruned blocks, and where it placed cache breakpoints, for a turn. `--top-blocks` ranks blocks by token cost. |
 | `cachelane config` | Print the active configuration. |
