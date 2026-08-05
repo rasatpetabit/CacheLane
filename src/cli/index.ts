@@ -50,6 +50,7 @@ import {
 import type { CachelaneConfig } from "../types/index.js";
 import type { RecordedBenchmarkReport } from "../benchmark/types.js";
 import type { ReportSource } from "../report/types.js";
+import { parseTranscriptApiCalls } from "./transcript-usage.js";
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -166,55 +167,6 @@ function readPrunerDebugEntries(logPath: string, limit: number): unknown[] {
   return entries.slice(-limit);
 }
 
-interface TranscriptApiCall {
-  id: string;
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_5m_tokens: number;
-  cache_creation_1h_tokens: number;
-  cache_read_tokens: number;
-  created_at: number;
-}
-
-function parseTranscriptApiCalls(content: string): TranscriptApiCall[] {
-  const calls: TranscriptApiCall[] = [];
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const entry = JSON.parse(trimmed) as Record<string, unknown>;
-      const msg = entry.message as Record<string, unknown> | undefined;
-      if (!msg || msg.role !== "assistant" || !msg.id || !msg.usage) continue;
-
-      const u = msg.usage as Record<string, number | Record<string, number> | undefined>;
-      const num = (v: number | undefined) => (typeof v === "number" ? v : 0);
-
-      calls.push({
-        id: msg.id as string,
-        model: (msg.model as string) ?? "",
-        input_tokens: num(u.input_tokens as number | undefined),
-        output_tokens: num(u.output_tokens as number | undefined),
-        cache_creation_5m_tokens: num(
-          (u.ephemeral_5m_input_tokens ??
-            u.cache_creation_5m_tokens ??
-            u.cache_creation_input_tokens) as number | undefined,
-        ),
-        cache_creation_1h_tokens: num(
-          (u.ephemeral_1h_input_tokens ?? u.cache_creation_1h_tokens) as number | undefined,
-        ),
-        cache_read_tokens: num(
-          (u.cache_read_input_tokens ?? u.cache_read_tokens) as number | undefined,
-        ),
-        created_at: typeof entry.timestamp === "number" ? (entry.timestamp as number) : Date.now(),
-      });
-    } catch {
-      // Skip malformed lines
-    }
-  }
-  return calls;
-}
-
 async function handleHookEvent(env: NodeJS.ProcessEnv, parsed: Record<string, unknown>): Promise<void> {
   try {
     const transcriptPath =
@@ -228,7 +180,9 @@ async function handleHookEvent(env: NodeJS.ProcessEnv, parsed: Record<string, un
       return;
     }
 
-    const calls = parseTranscriptApiCalls(content);
+    // One deterministic fallback per hook event; parser never calls Date.now().
+    const fallbackTimestampMs = Date.now();
+    const calls = parseTranscriptApiCalls(content, fallbackTimestampMs);
     if (calls.length === 0) return;
 
     // In Hook mode (e.g. Bedrock), we bypass the HTTP proxy, so we must

@@ -1,0 +1,96 @@
+export interface TranscriptApiCall {
+  id: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_5m_tokens: number;
+  cache_creation_1h_tokens: number;
+  cache_read_tokens: number;
+  created_at: number;
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function parseCreatedAt(
+  timestamp: unknown,
+  fallbackTimestampMs: number,
+): number {
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  if (typeof timestamp === "string") {
+    const parsed = Date.parse(timestamp);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallbackTimestampMs;
+}
+
+function readCacheCreationTiers(
+  usage: Record<string, unknown>,
+): { fiveMinute: number; oneHour: number } {
+  const nested = usage.cache_creation;
+  if (nested && typeof nested === "object") {
+    const nestedRecord = nested as Record<string, unknown>;
+    return {
+      fiveMinute: asNumber(nestedRecord.ephemeral_5m_input_tokens),
+      oneHour: asNumber(nestedRecord.ephemeral_1h_input_tokens),
+    };
+  }
+
+  // Legacy top-level fields. Prefer explicit tier fields; do not assign total
+  // cache_creation_input_tokens to the five-minute column when only totals exist.
+  const fiveMinute = asNumber(
+    usage.ephemeral_5m_input_tokens ?? usage.cache_creation_5m_tokens,
+  );
+  const oneHour = asNumber(
+    usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens,
+  );
+  return { fiveMinute, oneHour };
+}
+
+/**
+ * Parse Claude Code JSONL transcript content for assistant usage records.
+ * Pure: no Date.now(), no IO. Invalid timestamps use the caller-supplied fallback.
+ */
+export function parseTranscriptApiCalls(
+  content: string,
+  fallbackTimestampMs: number,
+): TranscriptApiCall[] {
+  const calls: TranscriptApiCall[] = [];
+
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    try {
+      const entry = JSON.parse(trimmed) as Record<string, unknown>;
+      const msg = entry.message as Record<string, unknown> | undefined;
+      if (!msg || msg.role !== "assistant" || !msg.id || !msg.usage) continue;
+      if (typeof msg.usage !== "object" || msg.usage === null) continue;
+
+      const usage = msg.usage as Record<string, unknown>;
+      const tiers = readCacheCreationTiers(usage);
+
+      calls.push({
+        id: String(msg.id),
+        model: typeof msg.model === "string" ? msg.model : "",
+        input_tokens: asNumber(usage.input_tokens),
+        output_tokens: asNumber(usage.output_tokens),
+        cache_creation_5m_tokens: tiers.fiveMinute,
+        cache_creation_1h_tokens: tiers.oneHour,
+        cache_read_tokens: asNumber(
+          usage.cache_read_input_tokens ?? usage.cache_read_tokens,
+        ),
+        created_at: parseCreatedAt(entry.timestamp, fallbackTimestampMs),
+      });
+    } catch {
+      // Skip malformed lines — fail-open.
+    }
+  }
+
+  return calls;
+}
