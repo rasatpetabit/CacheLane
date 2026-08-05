@@ -76,19 +76,46 @@ Rows without an exact transcript match remain **untouched**.
    #   <projects-root>/<encoded-workspace>/<session_id>.jsonl
    ```
 
-4. Inventory candidate historical hook rows **without writing**:
+4. Inventory candidate historical hook rows **without writing**. Use `json_each` exact equality for `mode:hook`; do **not** use `LIKE '%mode:hook%'` (it can false-match nested text). Quarantine malformed or non-array `signals` into a separate report — those rows are **not** write candidates until a human decides how to handle them:
 
    ```bash
    sqlite3 "$CLAUDE_DB" "
+     -- Valid candidates: signals is a JSON array that contains the exact element mode:hook
      SELECT COUNT(*) AS candidate_hook_rows
-     FROM turns
-     WHERE provider = 'anthropic'
-       AND (
-         signals LIKE '%mode:hook%'
-         OR signals LIKE '%\"mode:hook\"%'
+     FROM turns t
+     WHERE t.provider = 'anthropic'
+       AND json_valid(t.signals)
+       AND json_type(t.signals) = 'array'
+       AND EXISTS (
+         SELECT 1
+         FROM json_each(t.signals) je
+         WHERE je.value = 'mode:hook'
        );
+
+     -- Quarantine: missing/null, non-JSON, or JSON that is not an array
+     SELECT COUNT(*) AS quarantine_malformed_or_non_array_signals
+     FROM turns t
+     WHERE t.provider = 'anthropic'
+       AND (
+         t.signals IS NULL
+         OR NOT json_valid(t.signals)
+         OR json_type(t.signals) != 'array'
+       );
+
+     -- Optional detail for the quarantine report (read-only)
+     SELECT t.id, t.session_id, t.signals
+     FROM turns t
+     WHERE t.provider = 'anthropic'
+       AND (
+         t.signals IS NULL
+         OR NOT json_valid(t.signals)
+         OR json_type(t.signals) != 'array'
+       )
+     LIMIT 50;
    "
    ```
+
+   **Classification note:** only the `json_each` exact-equality set may enter Phase 3 preview as hook candidates. Quarantined malformed/non-array rows must be listed separately and stay out of the matched write set unless a later, explicitly authorized procedure defines a different recovery path for them.
 
 Stop here if you only needed an inventory. The remainder of this document is a future operator procedure.
 
@@ -155,14 +182,29 @@ For each candidate DB row (`turns.id` is the Anthropic/Claude message id used at
    - never assign total `cache_creation_input_tokens` to the 5m bucket when explicit 1h detail exists;
    - parse string ISO timestamps with `Date.parse`; accept only finite results;
    - use one deterministic fallback timestamp for invalid/missing event times (do not call wall-clock per row during preview aggregation).
-3. Classify each candidate into exactly one bucket:
+3. Classify each candidate into exactly one bucket. Classification must be **exhaustive** over the candidate set (every candidate lands in one bucket; no silent drops).
 
 | Preview bucket | Meaning |
 |---|---|
-| **matched** | Exactly one transcript usage entry for `(session_id, message.id)` and at least one correctable field differs |
-| **already-correct** | Exact match exists and all target fields already equal the repaired values |
+| **matched** | A single authoritative transcript usage record for `(session_id, message.id)` after the identical-record rule below, and at least one correctable field differs |
+| **already-correct** | A single authoritative transcript usage record for that pair (after the identical-record rule) and all target fields already equal the repaired values |
 | **unmatched** | No transcript usage entry for that pair |
-| **ambiguous** | More than one conflicting transcript usage entry for the same pair, or unreadable/partial transcript evidence |
+| **ambiguous** | Conflicting transcript evidence for the same pair, or unreadable/partial transcript evidence (see identical-record rule) |
+| **quarantine** (report only) | Candidate inventory excluded rows whose `signals` were malformed/non-array (Phase 0). Not a write class. |
+
+### Repeated identical transcript records (required rule)
+
+Transcript JSONL can legally contain more than one physical line for the same `message.id`. Classification must define that case explicitly:
+
+1. Collect every assistant usage-bearing record whose message id equals the candidate `turns.id` for that `session_id`.
+2. **Identical-record proof (all must hold):** for every pair of those records, the following are byte/value-equal after the same parser rules used for repair:
+   - full usage object used for repair (`input`/`output`/`cache_read` and nested/legacy cache-creation tiers);
+   - derived exclusive 5m/1h tier split;
+   - model identifier when present on the message;
+   - any other fields the repair would write from the transcript (except raw line offsets / log indices).
+3. **If the identical-record proof holds:** deterministically **deduplicate by message id** to a single logical transcript record (prefer the first occurrence in file order for provenance logging only; values are the same). Proceed to **matched** or **already-correct** based on DB vs repaired values. Do **not** mark identical repeats as ambiguous.
+4. **If any compared field differs:** classify as **ambiguous**. Do **not** pick a winner, average values, or "prefer latest."
+5. Unreadable JSONL, partial files, or missing required usage fields that prevent the proof → **ambiguous** (or **unmatched** only when zero usage-bearing records exist for the pair).
 
 Report at least:
 
@@ -171,15 +213,18 @@ matched=<n>
 unmatched=<n>
 already_correct=<n>
 ambiguous=<n>
+quarantine_malformed_signals=<n>
+identical_transcript_dedup_applied=<n>   # candidates collapsed from >1 identical transcript lines
 ```
 
-plus a sample of each non-zero class (session id, message id, current vs proposed tiers/signals/flags/timestamps).
+plus a sample of each non-zero class (session id, message id, current vs proposed tiers/signals/flags/timestamps; for ambiguous, list the conflicting usage/tier/model fields).
 
 **Hard rules for preview:**
 
 - Preview mode must open the DB read-only (`sqlite3 "file:$CLAUDE_DB?mode=ro"` or equivalent) and must not `UPDATE`/`INSERT`/`DELETE`.
-- Ambiguous and unmatched rows are **never** write candidates.
+- Ambiguous, unmatched, and quarantine rows are **never** write candidates.
 - Already-correct rows are listed but not rewritten.
+- Deduplication by message id is allowed **only** after the identical-record proof above; otherwise the pair is ambiguous.
 
 ## Phase 4 — Explicit human authorization
 
@@ -210,6 +255,8 @@ Fields to correct on each exact match:
 
 ```sql
 -- Pseudocode for the per-row UPDATE body (exact match only)
+-- signals: PRESERVE all existing valid array elements; append/dedupe required markers.
+-- Do NOT replace the whole signals array with a fixed two-element list.
 UPDATE turns
 SET
   cache_creation_5m_tokens = :parsed_5m,
@@ -219,7 +266,7 @@ SET
   input_tokens             = :parsed_input,         -- only if currently wrong vs transcript
   output_tokens            = :parsed_output,        -- only if currently wrong vs transcript
   effective_cost_units     = :recomputed_effective, -- from corrected token columns
-  signals                  = '["mode:hook","usage:recorded"]',
+  signals                  = :merged_signals_json,  -- see merge rule below
   request_mutated          = 0,
   created_at               = :parsed_created_at
 WHERE id = :message_id
@@ -228,11 +275,29 @@ WHERE id = :message_id
   AND provider = 'anthropic';
 ```
 
+### `signals` merge rule (required)
+
+Matched rows already passed Phase 0/`json_each` validation (`signals` is a JSON array). On write:
+
+1. Parse the existing `signals` array.
+2. **Preserve every existing valid element** (order: keep first-seen order of pre-existing elements).
+3. Ensure `mode:hook` is present exactly once (append only if missing).
+4. Ensure `usage:recorded` is present exactly once (append only if missing).
+5. Deduplicate exact string duplicates if the historical array already had them; do not invent new signal tokens beyond those two required markers.
+6. Serialize back to a JSON array. Example outcomes:
+   - `["mode:hook"]` → `["mode:hook","usage:recorded"]`
+   - `["mode:hook","usage:recorded","other:flag"]` → unchanged (already correct set)
+   - `["other:flag","mode:hook"]` → `["other:flag","mode:hook","usage:recorded"]`
+   - **Forbidden:** `signals = '["mode:hook","usage:recorded"]'` as a blind replacement that drops `other:flag` or any other pre-existing element.
+
+Rows whose `signals` are malformed/non-array remain in quarantine and are **not** updated by this procedure.
+
 Implementation constraints:
 
 - Update only rows present in the authorized matched set.
 - Do **not** allocate new turn numbers, insert new rows, or delete rows.
 - Do **not** modify LiteLLM-home databases in the same transaction.
+- Do **not** replace `signals` wholesale; always merge/dedupe as above.
 - Keep the transaction open until Phase 6 invariants pass; **rollback** on any failure.
 
 Effective cost recompute (must match product formula):
@@ -263,8 +328,9 @@ Before `COMMIT`, assert all of the following. On any mismatch: `ROLLBACK` immedi
 3. **Corrected tier totals**
    - sum of `cache_creation_5m_tokens` / `cache_creation_1h_tokens` / `cache_read_tokens` over the matched set equals the transcript-derived totals for that set.
 
-4. **Recorded usage provenance**
-   - every updated row's `signals` JSON includes both `mode:hook` and `usage:recorded`.
+4. **Recorded usage provenance (merge-preserving)**
+   - every updated row's `signals` JSON array includes both `mode:hook` and `usage:recorded` (exact elements via `json_each`, not substring match);
+   - every updated row still contains **all** pre-update valid signal elements (no wholesale array replacement); only missing required markers may have been appended and exact duplicates collapsed.
 
 5. **No-op pipeline outcome**
    - every updated row has `request_mutated = 0` (hook path does not mutate the request).
@@ -274,8 +340,11 @@ Before `COMMIT`, assert all of the following. On any mismatch: `ROLLBACK` immedi
    - when the transcript timestamp was valid, `created_at` equals that parsed value exactly;
    - no updated timestamp is later than the maintenance window start solely because of wall-clock rewrite during repair (fallback timestamps, if any, must be the single deterministic fallback chosen for that repair run and recorded in the operator log).
 
-7. **Non-candidates untouched**
-   - checksum or full-row compare for a sample (preferably all) of unmatched, ambiguous, and already-correct rows is identical to the pre-write snapshot.
+7. **Non-candidates untouched (full set, not a sample)**
+   - Before any write, take a **pre-write snapshot** of every non-candidate row (or rely on the Phase 2 backup DB as that snapshot). Non-candidates include: unmatched, ambiguous, already-correct, quarantine/malformed-signals, and any `provider != 'anthropic'` / non-hook rows outside the authorized matched set.
+   - **Required:** full-row compare (or cryptographic checksum of the full ordered non-candidate projection) for **every** non-candidate row against that pre-write snapshot/backup — **not** a sample, **not** a partial subset, **not** spot checks alone.
+   - Practical pattern: export `SELECT * FROM turns WHERE id NOT IN (/* matched ids */)` (or equivalent exclusion) from the pre-write backup and from the post-update DB-in-transaction; require byte-identical ordered dumps / matching SHA-256 over that full projection.
+   - Any single non-candidate drift → `ROLLBACK`.
 
 Only if every assertion passes: `COMMIT`.
 
