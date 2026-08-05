@@ -25,7 +25,7 @@ export function formatStats(stats: CachelaneStats): string {
   }
   lines.push(
     `Telemetry records: ${stats.turns}`,
-    `Observed provider cache reuse ratio: ${percent(stats.cache_hit_ratio)}`,
+    `Observed provider cache reuse ratio: ${(stats.cache_hit_ratio * 100).toFixed(3)}% (${stats.cache_read_tokens} / ${stats.logical_input_tokens} cache-read / logical tokens)`,
     `Pipeline fallback turns: ${stats.pipeline_fallback_turns}`,
     "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
     `Mutated turns: ${mutated}`,
@@ -36,6 +36,11 @@ export function formatStats(stats: CachelaneStats): string {
     `Baseline cost units: ${stats.baseline_cost_units.toFixed(2)}`,
     `Estimated provider input-cost savings: ${percent(stats.savings_ratio)}`,
     `Token reuse index: ${percent(stats.token_reuse_index ?? 0)}`,
+    `Logical input tokens: ${stats.logical_input_tokens}`,
+    `Uncached input tokens: ${stats.uncached_input_tokens}`,
+    `Cache-read tokens: ${stats.cache_read_tokens}`,
+    `5-minute cache-write tokens: ${stats.cache_creation_5m_tokens}`,
+    `1-hour cache-write tokens: ${stats.cache_creation_1h_tokens}`,
     `Pruned blocks: ${stats.pruner_counts.pruned_blocks}`,
     `Prune actions (cumulative): ${stats.pruner_counts.pruned_blocks}`,
     "Prune actions are cumulative; the same logical block can be pruned again on a later turn.",

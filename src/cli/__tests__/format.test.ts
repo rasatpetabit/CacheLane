@@ -47,6 +47,10 @@ describe("formatStats", () => {
       logical_input_tokens: 1_000,
       token_reuse_index: 0.85,
       provider_native_cost: 0,
+      uncached_input_tokens: 100,
+      cache_read_tokens: 850,
+      cache_creation_5m_tokens: 50,
+      cache_creation_1h_tokens: 100,
     };
 
     // Arithmetic proof for the fixture:
@@ -56,7 +60,7 @@ describe("formatStats", () => {
     //               = 0.1625 → 16.3% when formatted to 1 decimal place.
     const output = formatStats(stats);
     expect(output).toContain("Telemetry records: 10");
-    expect(output).toContain("Observed provider cache reuse ratio: 85.0%");
+    expect(output).toContain("Observed provider cache reuse ratio: 85.000% (850 / 1000 cache-read / logical tokens)");
     expect(output).toContain("Estimated provider input-cost savings: 16.3%");
     expect(output).toContain("Estimated compression tokens saved: 0");
     expect(output).not.toContain("Cache hit ratio:");
@@ -66,7 +70,7 @@ describe("formatStats", () => {
       [
         "Scope: workspace",
         "Telemetry records: 10",
-        "Observed provider cache reuse ratio: 85.0%",
+        "Observed provider cache reuse ratio: 85.000% (850 / 1000 cache-read / logical tokens)",
         "Pipeline fallback turns: 2",
         "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
         "Mutated turns: 5",
@@ -77,6 +81,11 @@ describe("formatStats", () => {
         "Baseline cost units: 120.00",
         "Estimated provider input-cost savings: 16.3%",
         "Token reuse index: 85.0%",
+        "Logical input tokens: 1000",
+        "Uncached input tokens: 100",
+        "Cache-read tokens: 850",
+        "5-minute cache-write tokens: 50",
+        "1-hour cache-write tokens: 100",
         "Pruned blocks: 4",
         "Prune actions (cumulative): 4",
         "Prune actions are cumulative; the same logical block can be pruned again on a later turn.",
@@ -90,6 +99,76 @@ describe("formatStats", () => {
         "Provider cache reuse and input-cost savings are observed provider telemetry; they are not attributed to CacheLane mutations.",
       ].join("\n")
     );
+  });
+
+  test("formats token observability breakdown with exact human lines", () => {
+    const stats: CachelaneStats = {
+      scope: "workspace",
+      workspace_id: "wk-123",
+      session_id: null,
+      since_ms: null,
+      turns: 1,
+      cache_hit_ratio: 200 / 950,
+      outcome_counts: { mutated: 0, baseline: 0, no_op: 0, fail_open: 0 },
+      pipeline_fallback_turns: 0,
+      effective_cost_units: 0,
+      baseline_cost_units: 0,
+      savings_ratio: 0,
+      pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0, tokens_reclaimed: 0 },
+      keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
+      compression_counts: { compressed_blocks: 0, tokens_saved: 0, by_profile: [] },
+      route_counts: { proxy: 0, hook: 0, other: 0 },
+      usage_counts: { recorded: 1, missing: 0, unknown: 0 },
+      usage_missing_rate: 0,
+      logical_input_tokens: 950,
+      token_reuse_index: 200 / 950,
+      provider_native_cost: 0,
+      uncached_input_tokens: 600,
+      cache_read_tokens: 200,
+      cache_creation_5m_tokens: 100,
+      cache_creation_1h_tokens: 50,
+    };
+
+    const output = formatStats(stats);
+    expect(output).toContain("Logical input tokens: 950");
+    expect(output).toContain("Uncached input tokens: 600");
+    expect(output).toContain("Cache-read tokens: 200");
+    expect(output).toContain("5-minute cache-write tokens: 100");
+    expect(output).toContain("1-hour cache-write tokens: 50");
+    expect(output).toContain("Observed provider cache reuse ratio: 21.053% (200 / 950 cache-read / logical tokens)");
+  });
+
+  test("formats all-zero token fields without NaN or Infinity", () => {
+    const stats: CachelaneStats = {
+      scope: "workspace",
+      workspace_id: "wk-123",
+      session_id: null,
+      since_ms: null,
+      turns: 0,
+      cache_hit_ratio: 0,
+      outcome_counts: { mutated: 0, baseline: 0, no_op: 0, fail_open: 0 },
+      pipeline_fallback_turns: 0,
+      effective_cost_units: 0,
+      baseline_cost_units: 0,
+      savings_ratio: 0,
+      pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0, tokens_reclaimed: 0 },
+      keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
+      compression_counts: { compressed_blocks: 0, tokens_saved: 0, by_profile: [] },
+      route_counts: { proxy: 0, hook: 0, other: 0 },
+      usage_counts: { recorded: 0, missing: 0, unknown: 0 },
+      usage_missing_rate: 0,
+      logical_input_tokens: 0,
+      token_reuse_index: 0,
+      provider_native_cost: 0,
+      uncached_input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
+    };
+
+    const output = formatStats(stats);
+    expect(output).not.toContain("NaN");
+    expect(output).not.toContain("Infinity");
   });
 });
 
@@ -158,6 +237,10 @@ describe("formatStats session and usage warnings", () => {
       logical_input_tokens: 500,
       token_reuse_index: 0.8,
       provider_native_cost: 0,
+      uncached_input_tokens: 500,
+      cache_read_tokens: 400,
+      cache_creation_5m_tokens: 50,
+      cache_creation_1h_tokens: 50,
     };
 
     const output = formatStats(stats);
@@ -188,6 +271,10 @@ describe("formatStats session and usage warnings", () => {
       logical_input_tokens: 300,
       token_reuse_index: 0.5,
       provider_native_cost: 0,
+      uncached_input_tokens: 300,
+      cache_read_tokens: 150,
+      cache_creation_5m_tokens: 25,
+      cache_creation_1h_tokens: 25,
     };
 
     const output = formatStats(stats);
@@ -216,6 +303,10 @@ describe("formatStats session and usage warnings", () => {
       logical_input_tokens: 300,
       token_reuse_index: 0.5,
       provider_native_cost: 0,
+      uncached_input_tokens: 300,
+      cache_read_tokens: 150,
+      cache_creation_5m_tokens: 25,
+      cache_creation_1h_tokens: 25,
     };
 
     const output = formatStats(stats);
@@ -244,6 +335,10 @@ describe("formatStats session and usage warnings", () => {
       logical_input_tokens: 0,
       token_reuse_index: 0,
       provider_native_cost: 0,
+      uncached_input_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
     };
 
     const output = formatStats(stats);

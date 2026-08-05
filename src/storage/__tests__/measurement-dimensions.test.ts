@@ -188,6 +188,10 @@ describe("measurement dimensions", () => {
     }));
 
     const stats = db.getStats({ scope: "all" });
+    expect(stats.uncached_input_tokens).toBe(600);
+    expect(stats.cache_read_tokens).toBe(400);
+    expect(stats.cache_creation_5m_tokens).toBe(0);
+    expect(stats.cache_creation_1h_tokens).toBe(0);
     expect(stats.logical_input_tokens).toBe(1_000);
     expect(stats.token_reuse_index).toBeCloseTo(0.4);
   });
@@ -197,13 +201,18 @@ describe("measurement dimensions", () => {
       input_tokens: 600,
       cache_read_tokens: 200,
       cache_creation_5m_tokens: 100,
+      cache_creation_1h_tokens: 50,
       effective_cost_units: 745,
       signals: JSON.stringify(["usage:recorded"]),
     }));
 
     const stats = db.getStats({ scope: "all" });
-    expect(stats.logical_input_tokens).toBe(900);
-    expect(stats.token_reuse_index).toBeCloseTo(200 / 900);
+    expect(stats.uncached_input_tokens).toBe(600);
+    expect(stats.cache_read_tokens).toBe(200);
+    expect(stats.cache_creation_5m_tokens).toBe(100);
+    expect(stats.cache_creation_1h_tokens).toBe(50);
+    expect(stats.logical_input_tokens).toBe(950);
+    expect(stats.token_reuse_index).toBeCloseTo(200 / 950);
   });
 
   it("classifies mode:baseline as proxy route with baseline outcome", () => {

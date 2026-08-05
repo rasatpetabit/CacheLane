@@ -494,6 +494,16 @@ export interface CachelaneStats {
   logical_input_tokens: number;
   /** Read tokens / provider-normalized logical input. This is not a cost figure. */
   token_reuse_index: number;
+  /** Provider-normalized uncached input tokens. For Anthropic this is the stored
+   * input_tokens aggregate. For OpenAI this is input_tokens minus cache_read_tokens,
+   * clamped to zero when cache_read exceeds input_tokens. */
+  uncached_input_tokens: number;
+  /** Cache-read tokens from provider usage. */
+  cache_read_tokens: number;
+  /** 5-minute cache-creation tokens from provider usage. */
+  cache_creation_5m_tokens: number;
+  /** 1-hour cache-creation tokens from provider usage. */
+  cache_creation_1h_tokens: number;
   /** Stored provider-native effective cost for OpenAI-chat rows; informational only. */
   provider_native_cost: number;
   /**

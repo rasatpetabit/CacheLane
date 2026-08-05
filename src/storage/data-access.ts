@@ -964,6 +964,10 @@ export function openDatabase(dbPath: string): CachelaneDb {
           WHEN provider = 'openai-chat' THEN input_tokens
           ELSE input_tokens + cache_read_tokens + cache_creation_5m_tokens + cache_creation_1h_tokens
         END), 0) AS logical_input,
+        COALESCE(SUM(CASE
+          WHEN provider = 'openai-chat' THEN MAX(input_tokens - cache_read_tokens, 0)
+          ELSE input_tokens
+        END), 0) AS uncached_input,
         COALESCE(SUM(CASE WHEN provider = 'openai-chat' THEN effective_cost_units ELSE 0 END), 0) AS provider_native_cost
       FROM turns
       ${where.sql}
@@ -979,6 +983,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
       marker_mixed: number;
       marker_unknown: number;
       logical_input: number;
+      uncached_input: number;
       provider_native_cost: number;
     };
 
@@ -1022,6 +1027,10 @@ export function openDatabase(dbPath: string): CachelaneDb {
       usage_missing_rate: row.turns === 0 ? 0 : dimensions.usage_missing / row.turns,
       logical_input_tokens: dimensions.logical_input,
       token_reuse_index: tokenReuseIndex,
+      uncached_input_tokens: dimensions.uncached_input,
+      cache_read_tokens: row.cache_read_tokens,
+      cache_creation_5m_tokens: row.cache_creation_5m_tokens,
+      cache_creation_1h_tokens: row.cache_creation_1h_tokens,
       provider_native_cost: dimensions.provider_native_cost,
       pipeline_fallback_turns: row.pipeline_fallback_turns,
       fail_open_turns: row.fail_open_turns,

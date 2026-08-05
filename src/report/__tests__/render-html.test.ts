@@ -74,6 +74,10 @@ const data: ReportData = {
     usage_missing_rate: 0.25,
     logical_input_tokens: 300,
     token_reuse_index: 0.4,
+    uncached_input_tokens: 180,
+    cache_read_tokens: 120,
+    cache_creation_5m_tokens: 0,
+    cache_creation_1h_tokens: 0,
     provider_native_cost: 0,
     pruner_counts: {
       pruned_blocks: 2,

@@ -337,8 +337,8 @@ describe("cachelane CLI", () => {
       provider: "anthropic",
       input_tokens: 100,
       output_tokens: 20,
-      cache_creation_5m_tokens: 0,
-      cache_creation_1h_tokens: 0,
+      cache_creation_5m_tokens: 100,
+      cache_creation_1h_tokens: 50,
       cache_read_tokens: 900,
       cache_write_tokens: 0,
       effective_cost_units: 190,
@@ -350,13 +350,27 @@ describe("cachelane CLI", () => {
     });
     db.close();
 
-    const output = await run(["stats", "--json"]);
-    expect(JSON.parse(output)).toMatchObject({
+    const jsonOutput = await run(["stats", "--json"]);
+    const jsonStats = JSON.parse(jsonOutput);
+    expect(jsonStats).toMatchObject({
       turns: 1,
-      cache_hit_ratio: 0.9,
+      cache_hit_ratio: 900 / 1150,
       pruner_counts: { pruned_blocks: 2 },
       keepalive_counts: { pings: 1 },
+      uncached_input_tokens: 100,
+      cache_read_tokens: 900,
+      cache_creation_5m_tokens: 100,
+      cache_creation_1h_tokens: 50,
+      logical_input_tokens: 1150,
     });
+
+    const humanOutput = await run(["stats"]);
+    expect(humanOutput).toContain("Logical input tokens: 1150");
+    expect(humanOutput).toContain("Uncached input tokens: 100");
+    expect(humanOutput).toContain("Cache-read tokens: 900");
+    expect(humanOutput).toContain("5-minute cache-write tokens: 100");
+    expect(humanOutput).toContain("1-hour cache-write tokens: 50");
+    expect(humanOutput).toContain("Observed provider cache reuse ratio: 78.261% (900 / 1150 cache-read / logical tokens)");
   });
 
   it("stats --json returns zero totals for an empty DB", async () => {
