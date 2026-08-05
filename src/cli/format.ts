@@ -21,7 +21,7 @@ export function formatStats(stats: CachelaneStats): string {
     Math.max(stats.pipeline_fallback_turns - baseline - failOpen, 0);
   return [
     `Scope: ${stats.scope}`,
-    `Usage events: ${stats.turns}`,
+    `Telemetry records: ${stats.turns}`,
     `Observed provider cache reuse ratio: ${percent(stats.cache_hit_ratio)}`,
     `Pipeline fallback turns: ${stats.pipeline_fallback_turns}`,
     "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
@@ -68,7 +68,7 @@ export function formatExplanation(
 export function formatSessions(rows: SessionSummaryRow[]): string {
   if (rows.length === 0) return "No sessions recorded.";
   const lines = [
-    `${"SESSION ID".padEnd(38)}  ${"EVENTS".padStart(6)}  ${"REUSE".padStart(6)}  ${"EST.SAV".padStart(7)}  LAST ACTIVE`,
+    `${"SESSION ID".padEnd(38)}  ${"RECORDS".padStart(7)}  ${"REUSE".padStart(6)}  ${"EST.SAV".padStart(7)}  LAST ACTIVE`,
     "-".repeat(80),
   ];
   for (const r of rows) {
@@ -76,7 +76,7 @@ export function formatSessions(rows: SessionSummaryRow[]): string {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
     });
     lines.push(
-      `${r.session_id.padEnd(38)}  ${String(r.turns).padStart(6)}  ${(r.cache_hit_ratio * 100).toFixed(1).padStart(5)}%  ${(r.savings_ratio * 100).toFixed(1).padStart(6)}%  ${date}`,
+      `${r.session_id.padEnd(38)}  ${String(r.turns).padStart(7)}  ${(r.cache_hit_ratio * 100).toFixed(1).padStart(5)}%  ${(r.savings_ratio * 100).toFixed(1).padStart(6)}%  ${date}`,
     );
   }
   return lines.join("\n");

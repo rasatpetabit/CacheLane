@@ -58,7 +58,7 @@ This makes exclusive outcomes classify these rows as `no_op`, while route remain
 
 Preserve stable JSON names (`turns`, `cache_hit_ratio`, `savings_ratio`) for compatibility, but revise CLI and session-table labels and explanatory copy:
 
-- `Turns` becomes `Usage events`, because mixed scopes may contain hook and proxy provider usage records;
+- `Turns` becomes `Telemetry records` (sessions table header `RECORDS`), because mixed scopes may contain hook and proxy provider usage records;
 - `Cache hit ratio` becomes `Observed provider cache reuse ratio`;
 - `Savings ratio` becomes `Estimated provider input-cost savings`;
 - `Estimated compression tokens saved` remains unchanged because it correctly reports zero when no compression occurred;

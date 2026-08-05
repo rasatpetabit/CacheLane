@@ -22,9 +22,11 @@ describe("formatStats", () => {
         fail_open: 2,
       },
       pipeline_fallback_turns: 2,
+      // savings_ratio must match effective/baseline arithmetic:
+      // (120.00 - 100.50) / 120.00 = 0.1625
       effective_cost_units: 100.5,
       baseline_cost_units: 120.0,
-      savings_ratio: 0.72,
+      savings_ratio: 0.1625,
       pruner_counts: {
         pruned_blocks: 4,
         turns_with_pruning: 2,
@@ -47,17 +49,23 @@ describe("formatStats", () => {
       provider_native_cost: 0,
     };
 
+    // Arithmetic proof for the fixture:
+    // savings_ratio = (baseline - effective) / baseline
+    //               = (120.00 - 100.50) / 120.00
+    //               = 19.50 / 120.00
+    //               = 0.1625 → 16.3% when formatted to 1 decimal place.
     const output = formatStats(stats);
-    expect(output).toContain("Usage events: 10");
+    expect(output).toContain("Telemetry records: 10");
     expect(output).toContain("Observed provider cache reuse ratio: 85.0%");
-    expect(output).toContain("Estimated provider input-cost savings: 72.0%");
+    expect(output).toContain("Estimated provider input-cost savings: 16.3%");
     expect(output).toContain("Estimated compression tokens saved: 0");
     expect(output).not.toContain("Cache hit ratio:");
     expect(output).not.toContain("Savings ratio:");
+    expect(output).not.toContain("Usage events:");
     expect(output).toBe(
       [
         "Scope: workspace",
-        "Usage events: 10",
+        "Telemetry records: 10",
         "Observed provider cache reuse ratio: 85.0%",
         "Pipeline fallback turns: 2",
         "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
@@ -67,7 +75,7 @@ describe("formatStats", () => {
         "Fail-open turns: 2",
         "Effective cost units: 100.50",
         "Baseline cost units: 120.00",
-        "Estimated provider input-cost savings: 72.0%",
+        "Estimated provider input-cost savings: 16.3%",
         "Token reuse index: 85.0%",
         "Pruned blocks: 4",
         "Prune actions (cumulative): 4",
@@ -93,20 +101,22 @@ describe("formatSessions", () => {
         session_id: "sess-abc",
         turns: 3,
         cache_hit_ratio: 0.5,
+        // (baseline - effective) / baseline = 0.25 → 25.0% in EST.SAV column
         savings_ratio: 0.25,
         last_active_ms: 1_715_000_000_000,
       },
     ];
 
     const output = formatSessions(rows);
-    expect(output).toContain("EVENTS");
+    expect(output).toContain("RECORDS");
     expect(output).toContain("REUSE");
     expect(output).toContain("EST.SAV");
     expect(output).not.toMatch(/\bTURNS\b/);
+    expect(output).not.toMatch(/\bEVENTS\b/);
     expect(output).not.toMatch(/\bHIT\b/);
     expect(output).not.toMatch(/\bSAVINGS\b/);
     expect(output.split("\n")[0]).toBe(
-      `${"SESSION ID".padEnd(38)}  ${"EVENTS".padStart(6)}  ${"REUSE".padStart(6)}  ${"EST.SAV".padStart(7)}  LAST ACTIVE`,
+      `${"SESSION ID".padEnd(38)}  ${"RECORDS".padStart(7)}  ${"REUSE".padStart(6)}  ${"EST.SAV".padStart(7)}  LAST ACTIVE`,
     );
   });
 });
