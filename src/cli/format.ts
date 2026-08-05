@@ -19,8 +19,11 @@ export function formatStats(stats: CachelaneStats): string {
   const noOp =
     stats.outcome_counts?.no_op ??
     Math.max(stats.pipeline_fallback_turns - baseline - failOpen, 0);
-  return [
-    `Scope: ${stats.scope}`,
+  const lines: string[] = [`Scope: ${stats.scope}`];
+  if (stats.session_id !== null) {
+    lines.push(`Session ID: ${stats.session_id}`);
+  }
+  lines.push(
     `Telemetry records: ${stats.turns}`,
     `Observed provider cache reuse ratio: ${percent(stats.cache_hit_ratio)}`,
     `Pipeline fallback turns: ${stats.pipeline_fallback_turns}`,
@@ -41,10 +44,19 @@ export function formatStats(stats: CachelaneStats): string {
     `Route: proxy ${stats.route_counts?.proxy ?? 0} / hook ${stats.route_counts?.hook ?? 0} / other ${stats.route_counts?.other ?? 0}`,
     `Usage: recorded ${stats.usage_counts?.recorded ?? 0} / missing ${stats.usage_counts?.missing ?? 0} / unknown ${stats.usage_counts?.unknown ?? 0}`,
     `Usage missing rate: ${percent(stats.usage_missing_rate ?? 0)}`,
+  );
+  const recorded = stats.usage_counts?.recorded ?? 0;
+  const missing = stats.usage_counts?.missing ?? 0;
+  const unknown = stats.usage_counts?.unknown ?? 0;
+  if (recorded === 0 && missing + unknown === stats.turns && stats.turns > 0) {
+    lines.push("Provider usage is unavailable for this selection; cache reuse and input-cost estimates are not meaningful.");
+  }
+  lines.push(
     `Provider native cost: ${(stats.provider_native_cost ?? 0) > 0 ? stats.provider_native_cost.toFixed(2) : "n/a"}`,
     `Estimated compression tokens saved: ${stats.compression_counts.tokens_saved}`,
     "Provider cache reuse and input-cost savings are observed provider telemetry; they are not attributed to CacheLane mutations.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 export function formatExplanation(

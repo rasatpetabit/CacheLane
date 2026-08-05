@@ -938,10 +938,15 @@ export function openDatabase(dbPath: string): CachelaneDb {
           SELECT 1 FROM json_each(signals) s WHERE s.value = 'mode:hook'
         ) THEN 1 ELSE 0 END), 0) AS hook,
         COALESCE(SUM(CASE WHEN EXISTS (
-          SELECT 1 FROM json_each(signals) s WHERE s.value = 'mode:proxy'
+          SELECT 1 FROM json_each(signals) s WHERE s.value IN ('mode:proxy', 'mode:baseline')
         ) OR NOT EXISTS (
           SELECT 1 FROM json_each(signals) s WHERE s.value LIKE 'mode:%'
         ) THEN 1 ELSE 0 END), 0) AS proxy,
+        COALESCE(SUM(CASE WHEN EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value LIKE 'mode:%'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM json_each(signals) s WHERE s.value IN ('mode:hook', 'mode:proxy', 'mode:baseline')
+        ) THEN 1 ELSE 0 END), 0) AS other,
         COALESCE(SUM(CASE WHEN EXISTS (
           SELECT 1 FROM json_each(signals) s WHERE s.value = 'usage:recorded'
         ) THEN 1 ELSE 0 END), 0) AS usage_recorded,
@@ -964,6 +969,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
       ${where.sql}
     `).get(where.bindings) as {
       hook: number;
+      other: number;
       proxy: number;
       usage_recorded: number;
       usage_missing: number;
@@ -1000,7 +1006,7 @@ export function openDatabase(dbPath: string): CachelaneDb {
       route_counts: {
         proxy: dimensions.proxy,
         hook: dimensions.hook,
-        other: Math.max(0, row.turns - dimensions.proxy - dimensions.hook),
+        other: dimensions.other ?? Math.max(0, row.turns - dimensions.proxy - dimensions.hook),
       },
       usage_counts: {
         recorded: dimensions.usage_recorded,

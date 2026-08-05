@@ -134,6 +134,24 @@ describe("measurement dimensions", () => {
     expect(stats.route_counts).toEqual({ proxy: 0, hook: 0, other: 1 });
   });
 
+  it("classifies mode:future and mode:other as other, mode:baseline as proxy", () => {
+    db.insertTurn(turn("t1", {
+      signals: JSON.stringify(["mode:future"]),
+      request_mutated: 0,
+    }));
+    db.insertTurn(turn("t2", {
+      signals: JSON.stringify(["mode:other"]),
+      request_mutated: 0,
+    }));
+    db.insertTurn(turn("t3", {
+      signals: JSON.stringify(["mode:baseline"]),
+      request_mutated: 0,
+    }));
+
+    const stats = db.getStats({ scope: "all" });
+    expect(stats.route_counts).toEqual({ proxy: 1, hook: 0, other: 2 });
+  });
+
   it("treats usage presence as explicit provenance, not a zero-token heuristic", () => {
     db.insertTurn(turn("t1", {
       input_tokens: 0,
@@ -186,5 +204,21 @@ describe("measurement dimensions", () => {
     const stats = db.getStats({ scope: "all" });
     expect(stats.logical_input_tokens).toBe(900);
     expect(stats.token_reuse_index).toBeCloseTo(200 / 900);
+  });
+
+  it("classifies mode:baseline as proxy route with baseline outcome", () => {
+    db.insertTurn(turn("t1", {
+      signals: JSON.stringify(["markers:preserved_client", "mode:baseline", "usage:missing"]),
+      request_mutated: 0,
+    }));
+
+    const stats = db.getStats({ scope: "all" });
+    expect(stats.route_counts).toEqual({ proxy: 1, hook: 0, other: 0 });
+    expect(stats.outcome_counts).toEqual({
+      fail_open: 0,
+      baseline: 1,
+      mutated: 0,
+      no_op: 0,
+    });
   });
 });

@@ -134,3 +134,119 @@ describe("formatReportCompletion", () => {
     );
   });
 });
+
+describe("formatStats session and usage warnings", () => {
+  test("prints Session ID after Scope when session-scoped", () => {
+    const stats: CachelaneStats = {
+      scope: "session",
+      workspace_id: "wk-123",
+      session_id: "sess-abc",
+      since_ms: null,
+      turns: 5,
+      cache_hit_ratio: 0.8,
+      outcome_counts: { mutated: 2, baseline: 1, no_op: 1, fail_open: 1 },
+      pipeline_fallback_turns: 2,
+      effective_cost_units: 90,
+      baseline_cost_units: 100,
+      savings_ratio: 0.1,
+      pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0, tokens_reclaimed: 0 },
+      keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
+      compression_counts: { compressed_blocks: 0, tokens_saved: 0, by_profile: [] },
+      route_counts: { proxy: 5, hook: 0, other: 0 },
+      usage_counts: { recorded: 3, missing: 1, unknown: 1 },
+      usage_missing_rate: 0.2,
+      logical_input_tokens: 500,
+      token_reuse_index: 0.8,
+      provider_native_cost: 0,
+    };
+
+    const output = formatStats(stats);
+    expect(output).toContain("Scope: session");
+    expect(output).toContain("Session ID: sess-abc");
+    expect(output).toMatch(/^Scope: session\nSession ID: sess-abc\n/);
+  });
+
+  test("warns when provider usage is unavailable", () => {
+    const stats: CachelaneStats = {
+      scope: "workspace",
+      workspace_id: "wk-123",
+      session_id: null,
+      since_ms: null,
+      turns: 3,
+      cache_hit_ratio: 0.5,
+      outcome_counts: { mutated: 0, baseline: 1, no_op: 1, fail_open: 1 },
+      pipeline_fallback_turns: 2,
+      effective_cost_units: 50,
+      baseline_cost_units: 100,
+      savings_ratio: 0.5,
+      pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0, tokens_reclaimed: 0 },
+      keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
+      compression_counts: { compressed_blocks: 0, tokens_saved: 0, by_profile: [] },
+      route_counts: { proxy: 3, hook: 0, other: 0 },
+      usage_counts: { recorded: 0, missing: 2, unknown: 1 },
+      usage_missing_rate: 2 / 3,
+      logical_input_tokens: 300,
+      token_reuse_index: 0.5,
+      provider_native_cost: 0,
+    };
+
+    const output = formatStats(stats);
+    expect(output).toContain("Provider usage is unavailable for this selection; cache reuse and input-cost estimates are not meaningful.");
+  });
+
+  test("does not warn when some usage is recorded", () => {
+    const stats: CachelaneStats = {
+      scope: "workspace",
+      workspace_id: "wk-123",
+      session_id: null,
+      since_ms: null,
+      turns: 3,
+      cache_hit_ratio: 0.5,
+      outcome_counts: { mutated: 0, baseline: 1, no_op: 1, fail_open: 1 },
+      pipeline_fallback_turns: 2,
+      effective_cost_units: 50,
+      baseline_cost_units: 100,
+      savings_ratio: 0.5,
+      pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0, tokens_reclaimed: 0 },
+      keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
+      compression_counts: { compressed_blocks: 0, tokens_saved: 0, by_profile: [] },
+      route_counts: { proxy: 3, hook: 0, other: 0 },
+      usage_counts: { recorded: 1, missing: 1, unknown: 1 },
+      usage_missing_rate: 1 / 3,
+      logical_input_tokens: 300,
+      token_reuse_index: 0.5,
+      provider_native_cost: 0,
+    };
+
+    const output = formatStats(stats);
+    expect(output).not.toContain("Provider usage is unavailable for this selection; cache reuse and input-cost estimates are not meaningful.");
+  });
+
+  test("does not warn when turns is zero", () => {
+    const stats: CachelaneStats = {
+      scope: "workspace",
+      workspace_id: "wk-123",
+      session_id: null,
+      since_ms: null,
+      turns: 0,
+      cache_hit_ratio: 0,
+      outcome_counts: { mutated: 0, baseline: 0, no_op: 0, fail_open: 0 },
+      pipeline_fallback_turns: 0,
+      effective_cost_units: 0,
+      baseline_cost_units: 0,
+      savings_ratio: 0,
+      pruner_counts: { pruned_blocks: 0, turns_with_pruning: 0, tokens_reclaimed: 0 },
+      keepalive_counts: { pings: 0, turns_with_keepalive: 0 },
+      compression_counts: { compressed_blocks: 0, tokens_saved: 0, by_profile: [] },
+      route_counts: { proxy: 0, hook: 0, other: 0 },
+      usage_counts: { recorded: 0, missing: 0, unknown: 0 },
+      usage_missing_rate: 0,
+      logical_input_tokens: 0,
+      token_reuse_index: 0,
+      provider_native_cost: 0,
+    };
+
+    const output = formatStats(stats);
+    expect(output).not.toContain("Provider usage is unavailable for this selection; cache reuse and input-cost estimates are not meaningful.");
+  });
+});
