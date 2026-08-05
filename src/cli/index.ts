@@ -225,8 +225,9 @@ async function handleHookEvent(env: NodeJS.ProcessEnv, parsed: Record<string, un
             middle_breakpoint_hash: null,
             pruned_blocks_count: 0,
             keepalive_pings_since_last_turn: 0,
-            signals: JSON.stringify(["mode:hook"]),
-            request_mutated: 1, // Indicate it was processed in hook mode
+            signals: JSON.stringify(["mode:hook", "usage:recorded"]),
+            // Hook path only observes transcript usage; it does not mutate the request.
+            request_mutated: 0,
             created_at: call.created_at,
           });
         }

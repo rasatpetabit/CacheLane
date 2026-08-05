@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createCachelaneCli } from "../index.js";
 import { openDatabase } from "../../storage/index.js";
 import { defaultWorkspaceId } from "../../config/index.js";
+
+const CLI_ENTRY = fileURLToPath(new URL("../index.ts", import.meta.url));
 
 let tmpDir: string;
 let env: NodeJS.ProcessEnv;
@@ -772,5 +776,66 @@ describe("cachelane CLI workspace scoping", () => {
 
     const output = await run(["stats", "--scope", "all", "--json"]);
     expect(JSON.parse(output)).toMatchObject({ turns: 2 });
+  });
+
+  it("hook stop persists nested 1h usage with honest provenance and dedupes by message id", () => {
+    const transcriptPath = path.join(tmpDir, "transcript.jsonl");
+    const messageId = "msg_hook_nested_1h";
+    const transcriptLine = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-08-04T01:44:56.194Z",
+      message: {
+        id: messageId,
+        role: "assistant",
+        model: "claude-opus-4-1",
+        usage: {
+          input_tokens: 2,
+          output_tokens: 18,
+          cache_creation_input_tokens: 4_000,
+          cache_read_input_tokens: 40_000,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 4_000,
+          },
+        },
+      },
+    });
+    fs.writeFileSync(transcriptPath, `${transcriptLine}\n`);
+
+    const payload = JSON.stringify({
+      session_id: "sess-hook-1",
+      transcript_path: transcriptPath,
+    });
+
+    const runHook = (): void => {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", CLI_ENTRY, "hook", "stop"],
+        {
+          env: { ...env, PATH: process.env.PATH },
+          input: payload,
+          encoding: "utf-8",
+        },
+      );
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+    };
+
+    runHook();
+    runHook();
+
+    const db = openDatabase(path.join(env.CACHELANE_HOME!, "cachelane.db"));
+    try {
+      const row = db.getTurn(messageId);
+      expect(row?.cache_creation_5m_tokens).toBe(0);
+      expect(row?.cache_creation_1h_tokens).toBe(4_000);
+      expect(row?.created_at).toBe(Date.parse("2026-08-04T01:44:56.194Z"));
+      expect(row?.request_mutated).toBe(0);
+      expect(JSON.parse(row?.signals ?? "[]")).toEqual(["mode:hook", "usage:recorded"]);
+
+      const stats = db.getStats({ scope: "all" });
+      expect(stats.turns).toBe(1);
+    } finally {
+      db.close();
+    }
   });
 });

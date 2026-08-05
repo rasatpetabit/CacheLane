@@ -110,6 +110,23 @@ describe("measurement dimensions", () => {
     });
   });
 
+  it("classifies honest hook observations as hook/recorded/no_op", () => {
+    db.insertTurn(turn("hook-honest", {
+      signals: JSON.stringify(["mode:hook", "usage:recorded"]),
+      request_mutated: 0,
+    }));
+
+    const stats = db.getStats({ scope: "all" });
+    expect(stats.route_counts).toEqual({ proxy: 0, hook: 1, other: 0 });
+    expect(stats.usage_counts).toEqual({ recorded: 1, missing: 0, unknown: 0 });
+    expect(stats.outcome_counts).toEqual({
+      fail_open: 0,
+      baseline: 0,
+      mutated: 0,
+      no_op: 1,
+    });
+  });
+
   it("counts unclassified routes in the other bucket", () => {
     db.insertTurn(turn("t1", { signals: JSON.stringify(["mode:other"]) }));
 
