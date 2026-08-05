@@ -41,10 +41,12 @@ function readCacheCreationTiers(
     };
   }
 
-  // Legacy top-level fields. Prefer explicit tier fields; do not assign total
-  // cache_creation_input_tokens to the five-minute column when only totals exist.
+  // Legacy top-level fields. Prefer explicit tier fields; when only a total
+  // exists, retain the historical five-minute fallback for older formats.
   const fiveMinute = asNumber(
-    usage.ephemeral_5m_input_tokens ?? usage.cache_creation_5m_tokens,
+    usage.ephemeral_5m_input_tokens ??
+      usage.cache_creation_5m_tokens ??
+      usage.cache_creation_input_tokens,
   );
   const oneHour = asNumber(
     usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens,

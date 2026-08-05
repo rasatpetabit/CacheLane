@@ -98,6 +98,25 @@ describe("parseTranscriptApiCalls", () => {
     expect(calls[0]!.cache_read_tokens).toBe(50);
   });
 
+  test("maps total-only legacy cache_creation_input_tokens to historical 5m fallback", () => {
+    const content = assistantLine({
+      id: "msg_legacy_total_only",
+      usage: {
+        input_tokens: 2,
+        output_tokens: 3,
+        cache_creation_input_tokens: 4_000,
+        cache_read_input_tokens: 40_000,
+      },
+      timestamp: "2026-01-01T00:00:00.000Z",
+    });
+
+    const calls = parseTranscriptApiCalls(content, FALLBACK_MS);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cache_creation_5m_tokens).toBe(4_000);
+    expect(calls[0]!.cache_creation_1h_tokens).toBe(0);
+    expect(calls[0]!.cache_read_tokens).toBe(40_000);
+  });
+
   test("skips malformed JSONL lines", () => {
     const content = [
       "{not-json",
