@@ -29,56 +29,73 @@ function parseCreatedAt(
   return fallbackTimestampMs;
 }
 
-function readCacheCreationTiers(
-  usage: Record<string, unknown>,
-): { fiveMinute: number; oneHour: number } {
-  const nested = usage.cache_creation;
-  if (nested && typeof nested === "object") {
-    const nestedRecord = nested as Record<string, unknown>;
-    return {
-      fiveMinute: asNumber(nestedRecord.ephemeral_5m_input_tokens),
-      oneHour: asNumber(nestedRecord.ephemeral_1h_input_tokens),
-    };
-  }
-
-  // Legacy top-level fields. Prefer explicit tier fields.
+function resolveCacheCreationTiers(opts: {
+  explicitFiveMinute: unknown;
+  explicitOneHour: unknown;
+  total: number;
+}): { fiveMinute: number; oneHour: number } {
+  // Prefer explicit tier fields when present.
   // - No explicit tiers: total → historical 5m fallback.
   // - Exactly one explicit tier: derive the missing tier as
   //   max(0, total - explicitTier) so mixed total+1h / total+5m shapes
   //   do not undercount or double-count.
   // - Both explicit: use both as-is (total is ignored).
-  const explicitFiveMinute =
-    usage.ephemeral_5m_input_tokens ?? usage.cache_creation_5m_tokens;
-  const explicitOneHour =
-    usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens;
-  const hasExplicitFiveMinute = explicitFiveMinute !== undefined;
-  const hasExplicitOneHour = explicitOneHour !== undefined;
-  const total = asNumber(usage.cache_creation_input_tokens);
+  const hasExplicitFiveMinute = opts.explicitFiveMinute !== undefined;
+  const hasExplicitOneHour = opts.explicitOneHour !== undefined;
 
   if (!hasExplicitFiveMinute && !hasExplicitOneHour) {
-    return { fiveMinute: total, oneHour: 0 };
+    return { fiveMinute: opts.total, oneHour: 0 };
   }
 
   if (hasExplicitFiveMinute && !hasExplicitOneHour) {
-    const fiveMinute = asNumber(explicitFiveMinute);
+    const fiveMinute = asNumber(opts.explicitFiveMinute);
     return {
       fiveMinute,
-      oneHour: Math.max(0, total - fiveMinute),
+      oneHour: Math.max(0, opts.total - fiveMinute),
     };
   }
 
   if (!hasExplicitFiveMinute && hasExplicitOneHour) {
-    const oneHour = asNumber(explicitOneHour);
+    const oneHour = asNumber(opts.explicitOneHour);
     return {
-      fiveMinute: Math.max(0, total - oneHour),
+      fiveMinute: Math.max(0, opts.total - oneHour),
       oneHour,
     };
   }
 
   return {
-    fiveMinute: asNumber(explicitFiveMinute),
-    oneHour: asNumber(explicitOneHour),
+    fiveMinute: asNumber(opts.explicitFiveMinute),
+    oneHour: asNumber(opts.explicitOneHour),
   };
+}
+
+function readCacheCreationTiers(
+  usage: Record<string, unknown>,
+): { fiveMinute: number; oneHour: number } {
+  const total = asNumber(usage.cache_creation_input_tokens);
+  const nested = usage.cache_creation;
+  if (nested && typeof nested === "object") {
+    // Nested cache_creation must reconcile with top-level total exactly
+    // like the legacy top-level path: presence of each nested tier key
+    // is what counts as "explicit", including an explicit 0.
+    const nestedRecord = nested as Record<string, unknown>;
+    return resolveCacheCreationTiers({
+      explicitFiveMinute: nestedRecord.ephemeral_5m_input_tokens,
+      explicitOneHour: nestedRecord.ephemeral_1h_input_tokens,
+      total,
+    });
+  }
+
+  // Legacy top-level fields.
+  const explicitFiveMinute =
+    usage.ephemeral_5m_input_tokens ?? usage.cache_creation_5m_tokens;
+  const explicitOneHour =
+    usage.ephemeral_1h_input_tokens ?? usage.cache_creation_1h_tokens;
+  return resolveCacheCreationTiers({
+    explicitFiveMinute,
+    explicitOneHour,
+    total,
+  });
 }
 
 /**

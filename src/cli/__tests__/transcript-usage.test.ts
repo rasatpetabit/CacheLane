@@ -60,6 +60,76 @@ describe("parseTranscriptApiCalls", () => {
     expect(call.created_at).toBe(Date.parse("2026-08-04T01:44:56.194Z"));
   });
 
+  test.each([
+    {
+      name: "nested only 1h derives missing 5m from top-level total",
+      nested: { ephemeral_1h_input_tokens: 4_000 },
+      total: 5_000,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "nested only 5m derives missing 1h from top-level total",
+      nested: { ephemeral_5m_input_tokens: 1_000 },
+      total: 5_000,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "nested both tiers use both (total ignored)",
+      nested: {
+        ephemeral_5m_input_tokens: 800,
+        ephemeral_1h_input_tokens: 200,
+      },
+      total: 9_999,
+      expectedFiveMinute: 800,
+      expectedOneHour: 200,
+    },
+    {
+      name: "nested empty object with total uses historical 5m",
+      nested: {},
+      total: 4_000,
+      expectedFiveMinute: 4_000,
+      expectedOneHour: 0,
+    },
+    {
+      name: "nested only 1h with total smaller never goes negative",
+      nested: { ephemeral_1h_input_tokens: 4_000 },
+      total: 1_000,
+      expectedFiveMinute: 0,
+      expectedOneHour: 4_000,
+    },
+    {
+      name: "nested only 5m with total smaller never goes negative",
+      nested: { ephemeral_5m_input_tokens: 1_000 },
+      total: 500,
+      expectedFiveMinute: 1_000,
+      expectedOneHour: 0,
+    },
+  ])(
+    "reconciles partial nested cache_creation with top-level total ($name)",
+    ({ nested, total, expectedFiveMinute, expectedOneHour }) => {
+      const content = assistantLine({
+        id: "msg_partial_nested",
+        usage: {
+          input_tokens: 2,
+          output_tokens: 18,
+          cache_creation_input_tokens: total,
+          cache_read_input_tokens: 40_000,
+          cache_creation: nested,
+        },
+        timestamp: "2026-08-04T01:44:56.194Z",
+      });
+
+      const calls = parseTranscriptApiCalls(content, FALLBACK_MS);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.cache_creation_5m_tokens).toBe(expectedFiveMinute);
+      expect(calls[0]!.cache_creation_1h_tokens).toBe(expectedOneHour);
+      expect(calls[0]!.cache_creation_5m_tokens).toBeGreaterThanOrEqual(0);
+      expect(calls[0]!.cache_creation_1h_tokens).toBeGreaterThanOrEqual(0);
+    },
+  );
+
   test("accepts numeric timestamps", () => {
     const ts = 1_722_740_000_000;
     const content = assistantLine({
