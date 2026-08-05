@@ -43,7 +43,7 @@ Rows without an exact transcript match remain **untouched**.
 
 ## Phase 0 — Prerequisites (read-only)
 
-1. Confirm the installed runtime already contains the future-path fixes:
+1. Confirm the installed runtime already contains the telemetry remediation fixes (transcript tier parsing, honest hook outcomes, non-attribution labels):
 
    ```bash
    cat /srv/cachelane/GIT_SHA
@@ -63,6 +63,8 @@ Rows without an exact transcript match remain **untouched**.
    echo "CLAUDE_HOME=${CACHELANE_HOME:-$HOME/.cachelane-claude}"
    CLAUDE_HOME="${CACHELANE_HOME:-$HOME/.cachelane-claude}"
    CLAUDE_DB="$CLAUDE_HOME/cachelane.db"
+   # Inventory/detail opens later must assert existence + use mode=ro URI.
+   [[ -f "$CLAUDE_DB" ]] || { echo "ERROR: missing DB: $CLAUDE_DB" >&2; exit 1; }
    ls -la "$CLAUDE_DB" "$CLAUDE_DB-wal" "$CLAUDE_DB-shm" 2>/dev/null || true
    ```
 
@@ -84,10 +86,16 @@ Rows without an exact transcript match remain **untouched**.
      `safe_signals = CASE WHEN <type-is-array> THEN signals ELSE '[]' END`, then call **`json_each(safe_signals)` only**.
    - A `WITH typed AS (...)` CTE scopes **only the immediately following single statement**. Multi-statement scripts must either (a) combine counts into **one** `SELECT`, or (b) **repeat** the full typed/`safe_signals` CTE before every later statement/detail query. Do not reference `typed` from a second statement after a first statement already consumed the CTE.
 
-   Combined inventory (candidate + quarantine counts in **one** statement — preferred):
+   Combined inventory (candidate + quarantine counts in **one** statement — preferred).
+   **Open contract (required for every inventory/detail query against a real DB):**
+   1. Assert the DB file exists first (`test -f` / `[[ -f ... ]]`); abort if missing.
+   2. Open with the SQLite **read-only URI** (`file:$CLAUDE_DB?mode=ro`) — never a bare writeable path for inventory/detail.
+   3. Do not `UPDATE`/`INSERT`/`DELETE` in inventory/detail sessions.
 
    ```bash
-   sqlite3 "$CLAUDE_DB" "
+   # Fail closed if the DB path is missing (do not open a new empty DB by accident).
+   [[ -f "$CLAUDE_DB" ]] || { echo "ERROR: missing DB: $CLAUDE_DB" >&2; exit 1; }
+   sqlite3 "file:${CLAUDE_DB}?mode=ro" "
      -- Normalize type + safe_signals once per statement.
      -- bare json_type(signals) and json_each(raw signals) are forbidden on untrusted text.
      WITH base AS (
@@ -134,10 +142,12 @@ Rows without an exact transcript match remain **untouched**.
    "
    ```
 
-   Optional quarantine detail (read-only). **Repeat** the full CTE — a prior statement's `typed` is out of scope:
+   Optional quarantine detail (read-only). **Repeat** the full CTE — a prior statement's `typed` is out of scope.
+   Same open contract: existing-file assertion + read-only URI.
 
    ```bash
-   sqlite3 "$CLAUDE_DB" "
+   [[ -f "$CLAUDE_DB" ]] || { echo "ERROR: missing DB: $CLAUDE_DB" >&2; exit 1; }
+   sqlite3 "file:${CLAUDE_DB}?mode=ro" "
      WITH base AS (
        SELECT
          t.id,
@@ -417,12 +427,40 @@ Do **not** stop LiteLLM lane services unless the operator intentionally includes
 Create a timestamped backup directory and copy the full SQLite file set **after** checkpointing WAL into the main DB file when possible:
 
 ```bash
+set -euo pipefail
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="${CLAUDE_HOME}/backups/hook-stats-repair-${STAMP}"
 mkdir -p "$BACKUP_DIR"
 
+[[ -f "$CLAUDE_DB" ]] || { echo "ERROR: missing DB: $CLAUDE_DB" >&2; exit 1; }
+
 # Prefer an exclusive checkpoint while writers are stopped.
-sqlite3 "$CLAUDE_DB" "PRAGMA wal_checkpoint(TRUNCATE);"
+# Fail closed: require process exit 0 AND inspect busy/log/checkpoint fields.
+# wal_checkpoint(TRUNCATE) returns one row: busy|log|checkpointed
+# - busy must be 0 (no blocking writers/readers preventing the checkpoint)
+# - when log > 0, checkpointed must equal log (full checkpoint of pending frames)
+# - do NOT copy until these checks pass
+CKPT_OUT="$(sqlite3 "$CLAUDE_DB" "PRAGMA wal_checkpoint(TRUNCATE);")"
+CKPT_RC=$?
+if [[ $CKPT_RC -ne 0 ]]; then
+  echo "ERROR: wal_checkpoint process failed rc=$CKPT_RC out=$CKPT_OUT" >&2
+  exit 1
+fi
+# busy|log|checkpointed  (SQLite pipe-separated)
+IFS='|' read -r CKPT_BUSY CKPT_LOG CKPT_DONE <<< "$CKPT_OUT"
+if [[ -z "${CKPT_BUSY:-}" || -z "${CKPT_LOG:-}" || -z "${CKPT_DONE:-}" ]]; then
+  echo "ERROR: unexpected wal_checkpoint output: $CKPT_OUT" >&2
+  exit 1
+fi
+if [[ "$CKPT_BUSY" -ne 0 ]]; then
+  echo "ERROR: wal_checkpoint busy=$CKPT_BUSY (writers/readers still active); refuse backup" >&2
+  exit 1
+fi
+if [[ "$CKPT_LOG" -gt 0 && "$CKPT_DONE" -ne "$CKPT_LOG" ]]; then
+  echo "ERROR: incomplete checkpoint log=$CKPT_LOG checkpointed=$CKPT_DONE; refuse backup" >&2
+  exit 1
+fi
+echo "wal_checkpoint ok busy=$CKPT_BUSY log=$CKPT_LOG checkpointed=$CKPT_DONE"
 
 cp -a "$CLAUDE_DB" "$BACKUP_DIR/cachelane.db"
 # Copy sidecars if they still exist after checkpoint.
@@ -433,6 +471,7 @@ cp -a "$CLAUDE_DB" "$BACKUP_DIR/cachelane.db"
 {
   echo "stamp=${STAMP}"
   echo "source_db=${CLAUDE_DB}"
+  echo "wal_checkpoint=${CKPT_OUT}"
   echo "repo_git_sha=$(git -C /path/to/cachelane-repo rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "installed_git_sha=$(cat /srv/cachelane/GIT_SHA 2>/dev/null || echo unknown)"
   sha256sum "$BACKUP_DIR"/cachelane.db*
@@ -441,7 +480,7 @@ cp -a "$CLAUDE_DB" "$BACKUP_DIR/cachelane.db"
 ls -la "$BACKUP_DIR"
 ```
 
-Do not proceed without a readable backup and manifest.
+Do not proceed without a readable backup and manifest. **Never copy after a non-zero checkpoint exit, non-zero busy, incomplete checkpoint, or malformed checkpoint output.**
 
 ## Phase 3 — Read-only preview (mandatory)
 
@@ -455,8 +494,9 @@ For each candidate DB row (`turns.id` is the Anthropic/Claude message id used at
 
 1. Locate the transcript JSONL for `session_id`.
 2. Parse assistant entries with `message.usage` using the same rules as the remediated parser:
-   - prefer nested `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`;
-   - fall back to legacy top-level tier fields only when nested detail is absent;
+   - prefer nested `usage.cache_creation.ephemeral_*` when the nested object is present;
+   - partial nested tiers must reconcile with top-level `cache_creation_input_tokens` exactly like legacy: if exactly one nested tier key is present, derive the missing tier as `max(0, total - explicit)`; if both nested tier keys are present, use both (total ignored); if the nested object is empty and total is present, use the historical 5m fallback;
+   - fall back to legacy top-level tier fields only when nested `cache_creation` is absent;
    - never assign total `cache_creation_input_tokens` to the 5m bucket when explicit 1h detail exists;
    - parse string ISO timestamps with `Date.parse`; accept only finite results;
    - use one deterministic fallback timestamp for invalid/missing event times (do not call wall-clock per row during preview aggregation).
@@ -499,7 +539,7 @@ plus a sample of each non-zero class (session id, message id, current vs propose
 
 **Hard rules for preview:**
 
-- Preview mode must open the DB read-only (`sqlite3 "file:$CLAUDE_DB?mode=ro"` or equivalent) and must not `UPDATE`/`INSERT`/`DELETE`.
+- Preview mode must first assert the DB file exists, then open read-only (`sqlite3 "file:$CLAUDE_DB?mode=ro"` or equivalent URI/mode) and must not `UPDATE`/`INSERT`/`DELETE`. Abort if the file is missing — do not create an empty DB.
 - Ambiguous, unmatched, and quarantine rows are **never** write candidates.
 - Already-correct rows are listed but not rewritten.
 - Deduplication by message id is allowed **only** after the identical-record proof above; otherwise the pair is ambiguous.
@@ -594,34 +634,68 @@ Before `COMMIT`, assert all of the following. On any mismatch: `ROLLBACK` immedi
 
 1. **Row identity stability**
    - total `turns` row count unchanged;
-   - set of `turns.id` unchanged;
+   - set of composite primary identities `(session_id, id)` unchanged (never treat bare `id` as globally unique across sessions);
    - set of `(session_id, turn_number)` pairs unchanged;
    - no new sessions introduced.
 
-2. **Exclusive cache-creation buckets**
+2. **Per-matched-row transcript equality (required — not aggregates alone)**
+   For **every** authorized matched row, compare the post-update DB values to the transcript-derived expected values for that same composite key `(session_id, id)`:
+   - `input_tokens`
+   - `output_tokens`
+   - `cache_read_tokens`
+   - `cache_creation_5m_tokens`
+   - `cache_creation_1h_tokens`
+   - `effective_cost_units` (must equal the recomputed formula below, not a stale stored value)
+   Any single-field mismatch on any matched row → `ROLLBACK`. Aggregate sums alone are **not** sufficient.
+
+3. **Effective-cost formula recompute (per matched row)**
+   For every matched row, recompute and assert:
+   ```text
+   effective_cost_units =
+       input_tokens
+     + 1.25 * cache_creation_5m_tokens
+     + 2.0  * cache_creation_1h_tokens
+     + 0.1  * cache_read_tokens
+   ```
+   Stored `effective_cost_units` must equal that recompute within floating-point equality used by the product (same formula as current CLI / Phase 5).
+
+4. **Exclusive cache-creation buckets**
    - for every updated row: `cache_write_tokens = cache_creation_5m_tokens + cache_creation_1h_tokens`;
    - no negative tier columns;
    - when transcript nested 1h detail was present, 5m/1h split matches that detail (not total-only collapse into 5m).
 
-3. **Corrected tier totals**
-   - sum of `cache_creation_5m_tokens` / `cache_creation_1h_tokens` / `cache_read_tokens` over the matched set equals the transcript-derived totals for that set.
+5. **Corrected tier totals**
+   - sum of `cache_creation_5m_tokens` / `cache_creation_1h_tokens` / `cache_read_tokens` over the matched set equals the transcript-derived totals for that set (in addition to the per-row checks above).
 
-4. **Recorded usage provenance (merge-preserving)**
+6. **Recorded usage provenance (merge-preserving)**
    - every updated row's `signals` JSON array includes both `mode:hook` and `usage:recorded` (exact elements via `json_each`, not substring match);
    - every updated row still contains **all** pre-update valid signal elements (no wholesale array replacement); only missing required markers may have been appended and exact duplicates collapsed.
 
-5. **No-op pipeline outcome**
+7. **No-op pipeline outcome**
    - every updated row has `request_mutated = 0` (hook path does not mutate the request).
 
-6. **Timestamp ranges**
+8. **Timestamp ranges**
    - every updated `created_at` is a finite epoch-ms value;
    - when the transcript timestamp was valid, `created_at` equals that parsed value exactly;
    - no updated timestamp is later than the maintenance window start solely because of wall-clock rewrite during repair (fallback timestamps, if any, must be the single deterministic fallback chosen for that repair run and recorded in the operator log).
 
-7. **Non-candidates untouched (full set, not a sample)**
+9. **Non-candidates untouched (full set, not a sample) — composite keys only**
    - Before any write, take a **pre-write snapshot** of every non-candidate row (or rely on the Phase 2 backup DB as that snapshot). Non-candidates include: unmatched, ambiguous, already-correct, quarantine/malformed-signals, and any `provider != 'anthropic'` / non-hook rows outside the authorized matched set.
    - **Required:** full-row compare (or cryptographic checksum of the full ordered non-candidate projection) for **every** non-candidate row against that pre-write snapshot/backup — **not** a sample, **not** a partial subset, **not** spot checks alone.
-   - Practical pattern: export `SELECT * FROM turns WHERE id NOT IN (/* matched ids */)` (or equivalent exclusion) from the pre-write backup and from the post-update DB-in-transaction; require byte-identical ordered dumps / matching SHA-256 over that full projection.
+   - **Identity key is composite `(session_id, id)`.** Never exclude or compare non-candidates by bare `id` alone — the same message id can exist in more than one session.
+   - Practical pattern: build the matched set as rows of `(session_id, id)`, then export non-candidates with a composite exclusion, e.g.:
+     ```sql
+     -- matched_keys is a temp table/CTE of authorized (session_id, id) pairs
+     SELECT t.*
+     FROM turns t
+     WHERE NOT EXISTS (
+       SELECT 1 FROM matched_keys m
+       WHERE m.session_id = t.session_id AND m.id = t.id
+     )
+     ORDER BY t.session_id, t.id;
+     ```
+     **Forbidden:** `WHERE id NOT IN (/* matched ids */)` — that can mark an unrelated session's row as "matched" and skip it, or fail to protect a non-candidate that shares only the message id.
+   - Require byte-identical ordered dumps / matching SHA-256 over that full composite-keyed projection from the pre-write backup and from the post-update DB-in-transaction.
    - Any single non-candidate drift → `ROLLBACK`.
 
 Only if every assertion passes: `COMMIT`.
