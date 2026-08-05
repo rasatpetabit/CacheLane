@@ -21,8 +21,8 @@ export function formatStats(stats: CachelaneStats): string {
     Math.max(stats.pipeline_fallback_turns - baseline - failOpen, 0);
   return [
     `Scope: ${stats.scope}`,
-    `Turns: ${stats.turns}`,
-    `Cache hit ratio: ${percent(stats.cache_hit_ratio)}`,
+    `Usage events: ${stats.turns}`,
+    `Observed provider cache reuse ratio: ${percent(stats.cache_hit_ratio)}`,
     `Pipeline fallback turns: ${stats.pipeline_fallback_turns}`,
     "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
     `Mutated turns: ${mutated}`,
@@ -31,8 +31,8 @@ export function formatStats(stats: CachelaneStats): string {
     `Fail-open turns: ${failOpen}`,
     `Effective cost units: ${stats.effective_cost_units.toFixed(2)}`,
     `Baseline cost units: ${stats.baseline_cost_units.toFixed(2)}`,
-    `Savings ratio: ${percent(stats.savings_ratio)}`,
-    `Token reuse index: ${percent(stats.token_reuse_index ?? 0)}`, 
+    `Estimated provider input-cost savings: ${percent(stats.savings_ratio)}`,
+    `Token reuse index: ${percent(stats.token_reuse_index ?? 0)}`,
     `Pruned blocks: ${stats.pruner_counts.pruned_blocks}`,
     `Prune actions (cumulative): ${stats.pruner_counts.pruned_blocks}`,
     "Prune actions are cumulative; the same logical block can be pruned again on a later turn.",
@@ -43,6 +43,7 @@ export function formatStats(stats: CachelaneStats): string {
     `Usage missing rate: ${percent(stats.usage_missing_rate ?? 0)}`,
     `Provider native cost: ${(stats.provider_native_cost ?? 0) > 0 ? stats.provider_native_cost.toFixed(2) : "n/a"}`,
     `Estimated compression tokens saved: ${stats.compression_counts.tokens_saved}`,
+    "Provider cache reuse and input-cost savings are observed provider telemetry; they are not attributed to CacheLane mutations.",
   ].join("\n");
 }
 
@@ -67,7 +68,7 @@ export function formatExplanation(
 export function formatSessions(rows: SessionSummaryRow[]): string {
   if (rows.length === 0) return "No sessions recorded.";
   const lines = [
-    `${"SESSION ID".padEnd(38)}  ${"TURNS".padStart(5)}  ${"HIT".padStart(6)}  ${"SAVINGS".padStart(7)}  LAST ACTIVE`,
+    `${"SESSION ID".padEnd(38)}  ${"EVENTS".padStart(6)}  ${"REUSE".padStart(6)}  ${"EST.SAV".padStart(7)}  LAST ACTIVE`,
     "-".repeat(80),
   ];
   for (const r of rows) {
@@ -75,7 +76,7 @@ export function formatSessions(rows: SessionSummaryRow[]): string {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
     });
     lines.push(
-      `${r.session_id.padEnd(38)}  ${String(r.turns).padStart(5)}  ${(r.cache_hit_ratio * 100).toFixed(1).padStart(5)}%  ${(r.savings_ratio * 100).toFixed(1).padStart(6)}%  ${date}`,
+      `${r.session_id.padEnd(38)}  ${String(r.turns).padStart(6)}  ${(r.cache_hit_ratio * 100).toFixed(1).padStart(5)}%  ${(r.savings_ratio * 100).toFixed(1).padStart(6)}%  ${date}`,
     );
   }
   return lines.join("\n");

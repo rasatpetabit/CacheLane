@@ -294,7 +294,7 @@ The region totals at the bottom reconcile exactly to the authoritative `usage` o
 | `cachelane install` | Register the MCP server + hooks and redirect Claude Code traffic through the proxy. Idempotent. |
 | `cachelane uninstall [--purge]` | Remove the integration. `--purge` also deletes `~/.cachelane` (config + database). |
 | `cachelane doctor [--json]` | Health check: Node version, config, SQLite writability, MCP + hook registration. |
-| `cachelane stats [--scope session\\|workspace\\|all] [--json]` | Cache hit ratio, turns, pruned blocks, and estimated savings. |
+| `cachelane stats [--scope session\\|workspace\\|all] [--json]` | Usage events, observed provider cache reuse, pruned blocks, and estimated provider input-cost savings. |
 | `cachelane sessions [--json]` | List all recorded sessions with hit ratio and savings. |
 | `cachelane report [--scope session\\|workspace\\|all]` | Generate and open a self-contained HTML dashboard webpage of your savings. |
 | `cachelane explain [--turn <N>] [--top-blocks [N]] [--json]` | Show how CacheLane classified and pruned blocks, and where it placed cache breakpoints, for a turn. `--top-blocks` ranks blocks by token cost. |

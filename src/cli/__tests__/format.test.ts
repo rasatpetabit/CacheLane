@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { formatReportCompletion, formatStats } from "../format.js";
-import type { CachelaneStats } from "../../storage/index.js";
+import {
+  formatReportCompletion,
+  formatSessions,
+  formatStats,
+} from "../format.js";
+import type { CachelaneStats, SessionSummaryRow } from "../../storage/index.js";
 
 describe("formatStats", () => {
   test("formats stats with distinct pipeline outcomes", () => {
@@ -20,7 +24,7 @@ describe("formatStats", () => {
       pipeline_fallback_turns: 2,
       effective_cost_units: 100.5,
       baseline_cost_units: 120.0,
-      savings_ratio: 0.1625,
+      savings_ratio: 0.72,
       pruner_counts: {
         pruned_blocks: 4,
         turns_with_pruning: 2,
@@ -44,11 +48,17 @@ describe("formatStats", () => {
     };
 
     const output = formatStats(stats);
+    expect(output).toContain("Usage events: 10");
+    expect(output).toContain("Observed provider cache reuse ratio: 85.0%");
+    expect(output).toContain("Estimated provider input-cost savings: 72.0%");
+    expect(output).toContain("Estimated compression tokens saved: 0");
+    expect(output).not.toContain("Cache hit ratio:");
+    expect(output).not.toContain("Savings ratio:");
     expect(output).toBe(
       [
         "Scope: workspace",
-        "Turns: 10",
-        "Cache hit ratio: 85.0%",
+        "Usage events: 10",
+        "Observed provider cache reuse ratio: 85.0%",
         "Pipeline fallback turns: 2",
         "Legacy metric (deprecated): pipeline fallback turns means request_mutated=0; use the exclusive outcome counts below.",
         "Mutated turns: 5",
@@ -57,7 +67,7 @@ describe("formatStats", () => {
         "Fail-open turns: 2",
         "Effective cost units: 100.50",
         "Baseline cost units: 120.00",
-        "Savings ratio: 16.3%",
+        "Estimated provider input-cost savings: 72.0%",
         "Token reuse index: 85.0%",
         "Pruned blocks: 4",
         "Prune actions (cumulative): 4",
@@ -69,7 +79,34 @@ describe("formatStats", () => {
         "Usage missing rate: 20.0%",
         "Provider native cost: n/a",
         "Estimated compression tokens saved: 0",
+        "Provider cache reuse and input-cost savings are observed provider telemetry; they are not attributed to CacheLane mutations.",
       ].join("\n")
+    );
+  });
+});
+
+describe("formatSessions", () => {
+  test("uses non-causal session table headers", () => {
+    const rows: SessionSummaryRow[] = [
+      {
+        workspace_id: "wk-123",
+        session_id: "sess-abc",
+        turns: 3,
+        cache_hit_ratio: 0.5,
+        savings_ratio: 0.25,
+        last_active_ms: 1_715_000_000_000,
+      },
+    ];
+
+    const output = formatSessions(rows);
+    expect(output).toContain("EVENTS");
+    expect(output).toContain("REUSE");
+    expect(output).toContain("EST.SAV");
+    expect(output).not.toMatch(/\bTURNS\b/);
+    expect(output).not.toMatch(/\bHIT\b/);
+    expect(output).not.toMatch(/\bSAVINGS\b/);
+    expect(output.split("\n")[0]).toBe(
+      `${"SESSION ID".padEnd(38)}  ${"EVENTS".padStart(6)}  ${"REUSE".padStart(6)}  ${"EST.SAV".padStart(7)}  LAST ACTIVE`,
     );
   });
 });
