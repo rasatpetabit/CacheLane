@@ -9,6 +9,10 @@ function percent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function percent3(value: number): string {
+  return `${(value * 100).toFixed(3)}%`;
+}
+
 export function formatStats(stats: CachelaneStats): string {
   const failOpen =
     stats.fail_open_turns ?? stats.outcome_counts?.fail_open ?? 0;
@@ -34,8 +38,8 @@ export function formatStats(stats: CachelaneStats): string {
     `Fail-open turns: ${failOpen}`,
     `Effective cost units: ${stats.effective_cost_units.toFixed(2)}`,
     `Baseline cost units: ${stats.baseline_cost_units.toFixed(2)}`,
-    `Estimated provider input-cost savings: ${percent(stats.savings_ratio)}`,
-    `Token reuse index: ${percent(stats.token_reuse_index ?? 0)}`,
+    `Estimated provider input-cost savings: ${percent3(stats.savings_ratio)}`,
+    `Token reuse index: ${percent3(stats.token_reuse_index ?? 0)}`,
     `Logical input tokens: ${stats.logical_input_tokens}`,
     `Uncached input tokens: ${stats.uncached_input_tokens}`,
     `Cache-read tokens: ${stats.cache_read_tokens}`,

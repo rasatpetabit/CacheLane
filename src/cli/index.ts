@@ -286,7 +286,7 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
   program
     .command("stats")
     .description("Read cache and pruning stats from the local SQLite log")
-    .option("--scope <scope>", "stats scope", parseStatsScope, "session")
+    .option("--scope <scope>", "stats scope", parseStatsScope, "workspace")
     .option("--since <time>", "ISO timestamp or ISO-8601 duration")
     .option("--workspace-id <id>", "Workspace scope")
     .option("--session-id <id>", "Session scope")
@@ -295,24 +295,29 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
     .option("--opt-in", "Enable anonymous telemetry opt-in")
     .option("--opt-out", "Disable anonymous telemetry opt-in")
     .action((cmd: JsonCommandOptions & {
-      scope: "session" | "workspace" | "all";
+      scope?: "session" | "workspace" | "all";
       since?: string;
       workspaceId?: string;
       sessionId?: string;
       db?: string;
       optIn?: boolean;
       optOut?: boolean;
-    }) => {
+    }, command: Command) => {
       if (cmd.optIn || cmd.optOut) {
         const config = setTelemetryOptIn(cachelaneConfigPath(env), Boolean(cmd.optIn));
         printConfig(io, config);
         return;
       }
 
+      const scopeSource = command.getOptionValueSource("scope");
+      const resolvedScope = cmd.sessionId && scopeSource === "default"
+        ? "session"
+        : (cmd.scope ?? "workspace");
+
       const { context, close } = contextFromOptions(env, cmd);
       try {
         const stats = handleStatsTool(context, {
-          scope: cmd.scope,
+          scope: resolvedScope,
           since: cmd.since,
         });
         io.stdout(cmd.json ? jsonLine(stats) : `${formatStats(stats)}\n`);

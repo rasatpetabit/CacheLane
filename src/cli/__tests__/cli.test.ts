@@ -22,6 +22,14 @@ interface SeedTurnOpts {
   turn_number?: number;
   pruned_blocks_count?: number;
   created_at?: number;
+  signals?: string[];
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_5m_tokens?: number;
+  cache_creation_1h_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  effective_cost_units?: number;
 }
 
 function seedTurn(db: CliDb, opts: SeedTurnOpts): void {
@@ -32,18 +40,19 @@ function seedTurn(db: CliDb, opts: SeedTurnOpts): void {
     turn_number: opts.turn_number ?? 1,
     model: "claude-opus-4-7",
     provider: "anthropic",
-    input_tokens: 100,
-    output_tokens: 20,
-    cache_creation_5m_tokens: 0,
-    cache_creation_1h_tokens: 0,
-    cache_read_tokens: 900,
-    cache_write_tokens: 0,
-    effective_cost_units: 190,
+    input_tokens: opts.input_tokens ?? 100,
+    output_tokens: opts.output_tokens ?? 20,
+    cache_creation_5m_tokens: opts.cache_creation_5m_tokens ?? 0,
+    cache_creation_1h_tokens: opts.cache_creation_1h_tokens ?? 0,
+    cache_read_tokens: opts.cache_read_tokens ?? 900,
+    cache_write_tokens: opts.cache_write_tokens ?? 0,
+    effective_cost_units: opts.effective_cost_units ?? 190,
     prefix_breakpoint_hash: null,
     middle_breakpoint_hash: null,
     pruned_blocks_count: opts.pruned_blocks_count ?? 0,
     keepalive_pings_since_last_turn: 0,
     created_at: opts.created_at ?? 1_715_000_000_000,
+    signals: JSON.stringify(opts.signals ?? []),
   });
 }
 
@@ -641,6 +650,75 @@ describe("cachelane CLI", () => {
     expect(html).toContain(path.join(smokeHome, "cachelane.db"));
     expect(html).not.toContain("~/.cachelane/cachelane.db");
   });
+
+  it("bare stats --json scopes to workspace with mixed recorded/missing sessions", async () => {
+    const db = openDatabase(path.join(env.CACHELANE_HOME!, "cachelane.db"));
+    // (a) older recorded Anthropic session with nonzero usage tokens and usage:recorded signal
+    seedTurn(db, {
+      id: "t-recorded",
+      workspace_id: "ws-1",
+      session_id: "sess-recorded",
+      turn_number: 1,
+      created_at: 1_715_000_000_000,
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
+      cache_read_tokens: 900,
+      cache_write_tokens: 0,
+      effective_cost_units: 190,
+      signals: ["usage:recorded"],
+    });
+    // (b) newer one-row session with zero tokens and usage:missing
+    seedTurn(db, {
+      id: "t-missing",
+      workspace_id: "ws-1",
+      session_id: "sess-missing",
+      turn_number: 1,
+      created_at: 1_715_000_001_000,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_5m_tokens: 0,
+      cache_creation_1h_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      effective_cost_units: 0,
+      signals: ["usage:missing"],
+    });
+    db.close();
+
+    // bare stats --json: scope workspace, session_id null, turns 2, nonzero logical/cache totals
+    const jsonOutput = await run(["stats", "--json"]);
+    const jsonStats = JSON.parse(jsonOutput);
+    expect(jsonStats).toMatchObject({
+      scope: "workspace",
+      session_id: null,
+      turns: 2,
+      logical_input_tokens: 1000,
+      cache_read_tokens: 900,
+      uncached_input_tokens: 100,
+    });
+    expect(jsonStats.logical_input_tokens).toBeGreaterThan(0);
+    expect(jsonStats.cache_read_tokens).toBeGreaterThan(0);
+
+    // bare human stats: Scope: workspace, no Session ID: line, nonzero exact token/reuse fraction
+    const humanOutput = await run(["stats"]);
+    expect(humanOutput).toContain("Scope: workspace");
+    expect(humanOutput).not.toContain("Session ID:");
+    expect(humanOutput).toContain("Logical input tokens: 1000");
+    expect(humanOutput).toContain("Cache-read tokens: 900");
+    expect(humanOutput).toContain("Uncached input tokens: 100");
+    expect(humanOutput).toMatch(/Observed provider cache reuse ratio: 90\.000% \(900 \/ 1000 cache-read \/ logical tokens\)/);
+
+    // stats --scope session --json: explicit session scope remains session;
+    // env CACHELANE_SESSION_ID=sess-1 has no rows, so turns are zero.
+    // Latest auto-resolution is separately covered when env session is absent.
+    const sessionOutput = await run(["stats", "--scope", "session", "--json"]);
+    const sessionStats = JSON.parse(sessionOutput);
+    expect(sessionStats.scope).toBe("session");
+    expect(sessionStats.session_id).not.toBeNull();
+    expect(sessionStats.turns).toBe(0);
+  });
 });
 
 describe("cachelane CLI workspace scoping", () => {
@@ -778,6 +856,37 @@ describe("cachelane CLI workspace scoping", () => {
 
     const output = await run(["explain", "--json"]);
     expect(JSON.parse(output)).toEqual({ found: false });
+  });
+
+  // S5: explicit --session-id forces session scope when --scope is omitted.
+  it("stats --session-id forces session scope when --scope is omitted", async () => {
+    delete env.CACHELANE_WORKSPACE_ID;
+    delete env.CACHELANE_SESSION_ID;
+    const ws = defaultWorkspaceId();
+    const db = dbAt();
+    seedTurn(db, {
+      id: "t-s5-a",
+      workspace_id: ws,
+      session_id: "sess-target",
+      turn_number: 1,
+      pruned_blocks_count: 9,
+    });
+    seedTurn(db, {
+      id: "t-s5-b",
+      workspace_id: ws,
+      session_id: "sess-other",
+      turn_number: 1,
+      pruned_blocks_count: 2,
+    });
+    db.close();
+
+    const output = await run(["stats", "--session-id", "sess-target", "--json"]);
+    expect(JSON.parse(output)).toMatchObject({
+      scope: "session",
+      session_id: "sess-target",
+      turns: 1,
+      pruner_counts: { pruned_blocks: 9 },
+    });
   });
 
   // R2: scope=all ignores workspace entirely and aggregates across workspaces.

@@ -219,6 +219,7 @@ On **any** error it forwards the original, unmodified request, so CacheLane neve
 
 CacheLane records every turn under a **workspace** derived from the directory Claude Code was launched in, plus the Claude Code **session id**. `cachelane stats` mirrors that:
 
+- `cachelane stats`: all sessions for the current project (workspace scope, the default).
 - `cachelane stats --scope session`: the most recent session **in the current project** (run it from your project dir). With no `--session-id`, it auto-selects the latest session.
 - `cachelane stats --scope workspace`: all sessions for the current project.
 - `cachelane stats --scope all`: everything, across all projects.

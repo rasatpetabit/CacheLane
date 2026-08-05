@@ -61,7 +61,7 @@ describe("formatStats", () => {
     const output = formatStats(stats);
     expect(output).toContain("Telemetry records: 10");
     expect(output).toContain("Observed provider cache reuse ratio: 85.000% (850 / 1000 cache-read / logical tokens)");
-    expect(output).toContain("Estimated provider input-cost savings: 16.3%");
+    expect(output).toContain("Estimated provider input-cost savings: 16.250%");
     expect(output).toContain("Estimated compression tokens saved: 0");
     expect(output).not.toContain("Cache hit ratio:");
     expect(output).not.toContain("Savings ratio:");
@@ -79,8 +79,8 @@ describe("formatStats", () => {
         "Fail-open turns: 2",
         "Effective cost units: 100.50",
         "Baseline cost units: 120.00",
-        "Estimated provider input-cost savings: 16.3%",
-        "Token reuse index: 85.0%",
+        "Estimated provider input-cost savings: 16.250%",
+        "Token reuse index: 85.000%",
         "Logical input tokens: 1000",
         "Uncached input tokens: 100",
         "Cache-read tokens: 850",
