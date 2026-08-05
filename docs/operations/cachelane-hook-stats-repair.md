@@ -78,12 +78,19 @@ Rows without an exact transcript match remain **untouched**.
 
 4. Inventory candidate historical hook rows **without writing**. Use `json_each` exact equality for `mode:hook`; do **not** use `LIKE '%mode:hook%'` (it can false-match nested text). Quarantine malformed or non-array `signals` into a separate report — those rows are **not** write candidates until a human decides how to handle them.
 
-   **SQL safety for `signals`:** never call bare `json_type(signals)` (or `json_each(signals)`) on rows that may contain malformed JSON. SQLite may evaluate `json_type(...)` even when a sibling `json_valid(...)` predicate is present in `AND`/`OR` chains and raise `malformed JSON`. Guard every `json_type` with `CASE WHEN json_valid(...) THEN json_type(...) END` (or equivalent CTE normalization). Only feed `json_each` after that guard has proven the value is a JSON array.
+   **SQL safety for `signals`:**
+   - Never call bare `json_type(signals)` on untrusted text. SQLite may evaluate `json_type(...)` even when a sibling `json_valid(...)` predicate is present in `AND`/`OR` chains and raise `malformed JSON`. Guard every `json_type` with `CASE WHEN signals IS NOT NULL AND json_valid(signals) THEN json_type(signals) END` (or equivalent CTE normalization).
+   - Never pass raw untrusted `signals` into `json_each`, even behind a sibling `signals_json_type = 'array'` predicate. Normalize a sanitized expression first:
+     `safe_signals = CASE WHEN <type-is-array> THEN signals ELSE '[]' END`, then call **`json_each(safe_signals)` only**.
+   - A `WITH typed AS (...)` CTE scopes **only the immediately following single statement**. Multi-statement scripts must either (a) combine counts into **one** `SELECT`, or (b) **repeat** the full typed/`safe_signals` CTE before every later statement/detail query. Do not reference `typed` from a second statement after a first statement already consumed the CTE.
+
+   Combined inventory (candidate + quarantine counts in **one** statement — preferred):
 
    ```bash
    sqlite3 "$CLAUDE_DB" "
-     -- Normalize type once; bare json_type(signals) is forbidden on untrusted text.
-     WITH typed AS (
+     -- Normalize type + safe_signals once per statement.
+     -- bare json_type(signals) and json_each(raw signals) are forbidden on untrusted text.
+     WITH base AS (
        SELECT
          t.id,
          t.session_id,
@@ -94,30 +101,64 @@ Rows without an exact transcript match remain **untouched**.
            THEN json_type(t.signals)
          END AS signals_json_type
        FROM turns t
+     ),
+     typed AS (
+       SELECT
+         b.*,
+         CASE
+           WHEN b.signals_json_type = 'array' THEN b.signals
+           ELSE '[]'
+         END AS safe_signals
+       FROM base b
      )
-     -- Valid candidates: signals is a JSON array that contains the exact element mode:hook
-     SELECT COUNT(*) AS candidate_hook_rows
-     FROM typed t
-     WHERE t.provider = 'anthropic'
-       AND t.signals_json_type = 'array'
-       AND EXISTS (
-         SELECT 1
-         FROM json_each(t.signals) je
-         WHERE je.value = 'mode:hook'
-       );
+     SELECT
+       (SELECT COUNT(*)
+        FROM typed t
+        WHERE t.provider = 'anthropic'
+          AND t.signals_json_type = 'array'
+          AND EXISTS (
+            SELECT 1
+            FROM json_each(t.safe_signals) je
+            WHERE je.value = 'mode:hook'
+          )
+       ) AS candidate_hook_rows,
+       (SELECT COUNT(*)
+        FROM typed t
+        WHERE t.provider = 'anthropic'
+          AND (
+            t.signals IS NULL
+            OR t.signals_json_type IS NULL
+            OR t.signals_json_type != 'array'
+          )
+       ) AS quarantine_malformed_or_non_array_signals;
+   "
+   ```
 
-     -- Quarantine: missing/null, non-JSON, or JSON that is not an array
-     -- (signals_json_type IS NULL covers NULL and invalid JSON; != 'array' covers objects/scalars)
-     SELECT COUNT(*) AS quarantine_malformed_or_non_array_signals
-     FROM typed t
-     WHERE t.provider = 'anthropic'
-       AND (
-         t.signals IS NULL
-         OR t.signals_json_type IS NULL
-         OR t.signals_json_type != 'array'
-       );
+   Optional quarantine detail (read-only). **Repeat** the full CTE — a prior statement's `typed` is out of scope:
 
-     -- Optional detail for the quarantine report (read-only)
+   ```bash
+   sqlite3 "$CLAUDE_DB" "
+     WITH base AS (
+       SELECT
+         t.id,
+         t.session_id,
+         t.provider,
+         t.signals,
+         CASE
+           WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+           THEN json_type(t.signals)
+         END AS signals_json_type
+       FROM turns t
+     ),
+     typed AS (
+       SELECT
+         b.*,
+         CASE
+           WHEN b.signals_json_type = 'array' THEN b.signals
+           ELSE '[]'
+         END AS safe_signals
+       FROM base b
+     )
      SELECT t.id, t.session_id, t.signals, t.signals_json_type
      FROM typed t
      WHERE t.provider = 'anthropic'
@@ -130,20 +171,38 @@ Rows without an exact transcript match remain **untouched**.
    "
    ```
 
-   Equivalent inline guard (when a CTE is inconvenient):
+   Equivalent inline guards (when a CTE is inconvenient):
 
    ```sql
+   -- type proof
    CASE WHEN t.signals IS NOT NULL AND json_valid(t.signals)
         THEN json_type(t.signals)
    END = 'array'
+
+   -- sanitized feed for json_each (never pass raw t.signals)
+   json_each(
+     CASE
+       WHEN (
+         CASE WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+              THEN json_type(t.signals)
+         END
+       ) = 'array'
+       THEN t.signals
+       ELSE '[]'
+     END
+   )
    ```
 
-   **Classification note:** only the `json_each` exact-equality set may enter Phase 3 preview as hook candidates. Quarantined malformed/non-array rows must be listed separately and stay out of the matched write set unless a later, explicitly authorized procedure defines a different recovery path for them.
+   **Classification note:** only the `json_each(safe_signals)` exact-equality set may enter Phase 3 preview as hook candidates. Quarantined malformed/non-array rows must be listed separately and stay out of the matched write set unless a later, explicitly authorized procedure defines a different recovery path for them.
 
-5. **Read-only smoke (in-memory / temp table only — not the live DB).** Before trusting the inventory SQL on a real file, prove the candidate and quarantine queries return counts without error on valid-array, malformed, and non-array JSON. This check is documentation verification only; it does **not** touch `~/.cachelane-claude/cachelane.db`.
+5. **Read-only smoke (in-memory / temp table only — not the live DB).** Before trusting the inventory SQL on a real file, execute the **entire** multi-statement Phase 0 pattern (combined counts **and** quarantine detail) against a fixture covering: valid array with `mode:hook`, malformed JSON, JSON object, NULL, and other array without `mode:hook`. This check is documentation verification only; it does **not** touch `~/.cachelane-claude/cachelane.db`.
+
+   Prefer the `sqlite3` CLI when available. If the host lacks `sqlite3`, use the Python 3 `sqlite3` stdlib fallback below (same SQL, `:memory:` only).
+
+   ### Smoke A — `sqlite3` CLI
 
    ```bash
-   # Requires the sqlite3 CLI. Uses :memory: only — never point this at a live lane DB.
+   # Uses :memory: only — never point this at a live lane DB.
    sqlite3 :memory: <<'SQL'
    CREATE TABLE turns (
      id INTEGER,
@@ -158,10 +217,12 @@ Rows without an exact transcript match remain **untouched**.
      (4, 's-null',    'anthropic', NULL),              -- null signals
      (5, 's-other',   'anthropic', '["other"]');       -- array without mode:hook
 
-   -- Forbidden pattern (illustrative): bare json_type on malformed text raises.
-   -- Uncomment to observe: SELECT json_type(signals) FROM turns WHERE id = 2;
+   -- Forbidden patterns (illustrative only; do not leave uncommented in operator runs):
+   --   SELECT json_type(signals) FROM turns WHERE id = 2;          -- bare json_type
+   --   SELECT 1 FROM json_each((SELECT signals FROM turns WHERE id = 2)); -- raw untrusted feed
 
-   WITH typed AS (
+   -- Statement 1: combined candidate + quarantine counts (single SELECT; CTE in scope)
+   WITH base AS (
      SELECT
        t.*,
        CASE
@@ -169,13 +230,22 @@ Rows without an exact transcript match remain **untouched**.
          THEN json_type(t.signals)
        END AS signals_json_type
      FROM turns t
+   ),
+   typed AS (
+     SELECT
+       b.*,
+       CASE
+         WHEN b.signals_json_type = 'array' THEN b.signals
+         ELSE '[]'
+       END AS safe_signals
+     FROM base b
    )
    SELECT
      (SELECT COUNT(*) FROM typed t
        WHERE t.provider = 'anthropic'
          AND t.signals_json_type = 'array'
          AND EXISTS (
-           SELECT 1 FROM json_each(t.signals) je WHERE je.value = 'mode:hook'
+           SELECT 1 FROM json_each(t.safe_signals) je WHERE je.value = 'mode:hook'
          )
      ) AS candidate_hook_rows,
      (SELECT COUNT(*) FROM typed t
@@ -186,13 +256,144 @@ Rows without an exact transcript match remain **untouched**.
            OR t.signals_json_type != 'array'
          )
      ) AS quarantine_malformed_or_non_array_signals;
-   -- Expected one-line result: 1|3
-   -- (1 candidate with mode:hook; 3 quarantine: malformed + object + NULL)
-   -- Exit status must be 0 with no "malformed JSON" error.
+
+   -- Statement 2: quarantine detail — CTE MUST be repeated (prior typed is out of scope)
+   WITH base AS (
+     SELECT
+       t.*,
+       CASE
+         WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+         THEN json_type(t.signals)
+       END AS signals_json_type
+     FROM turns t
+   ),
+   typed AS (
+     SELECT
+       b.*,
+       CASE
+         WHEN b.signals_json_type = 'array' THEN b.signals
+         ELSE '[]'
+       END AS safe_signals
+     FROM base b
+   )
+   SELECT t.id, t.session_id, t.signals, t.signals_json_type
+   FROM typed t
+   WHERE t.provider = 'anthropic'
+     AND (
+       t.signals IS NULL
+       OR t.signals_json_type IS NULL
+       OR t.signals_json_type != 'array'
+     )
+   ORDER BY t.id;
+   -- Expected:
+   --   counts line: 1|3   (candidate=1, quarantine=3)
+   --   detail rows: ids 2,3,4 (malformed + object + NULL); not id 5 (valid array, non-candidate)
+   -- Exit status must be 0 with no "malformed JSON" / "no such table: typed" error.
    SQL
    ```
 
-   Success criteria for the smoke: process exit `0`, printed counts `1|3` (or equivalent column labels with those values), and **no** `malformed JSON` error. If the smoke fails, do not run the inventory against a real DB until the SQL guards match this pattern.
+   ### Smoke B — Python 3 `sqlite3` fallback (no CLI required)
+
+   ```bash
+   python3 <<'PY'
+   import sqlite3
+
+   SQL_SETUP = """
+   CREATE TABLE turns (
+     id INTEGER,
+     session_id TEXT,
+     provider TEXT,
+     signals TEXT
+   );
+   INSERT INTO turns VALUES
+     (1, 's-valid',   'anthropic', '["mode:hook"]'),
+     (2, 's-bad',     'anthropic', 'not-json'),
+     (3, 's-object',  'anthropic', '{"a":1}'),
+     (4, 's-null',    'anthropic', NULL),
+     (5, 's-other',   'anthropic', '["other"]');
+   """
+
+   SQL_COUNTS = """
+   WITH base AS (
+     SELECT
+       t.*,
+       CASE
+         WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+         THEN json_type(t.signals)
+       END AS signals_json_type
+     FROM turns t
+   ),
+   typed AS (
+     SELECT
+       b.*,
+       CASE
+         WHEN b.signals_json_type = 'array' THEN b.signals
+         ELSE '[]'
+       END AS safe_signals
+     FROM base b
+   )
+   SELECT
+     (SELECT COUNT(*) FROM typed t
+       WHERE t.provider = 'anthropic'
+         AND t.signals_json_type = 'array'
+         AND EXISTS (
+           SELECT 1 FROM json_each(t.safe_signals) je WHERE je.value = 'mode:hook'
+         )
+     ) AS candidate_hook_rows,
+     (SELECT COUNT(*) FROM typed t
+       WHERE t.provider = 'anthropic'
+         AND (
+           t.signals IS NULL
+           OR t.signals_json_type IS NULL
+           OR t.signals_json_type != 'array'
+         )
+     ) AS quarantine_malformed_or_non_array_signals;
+   """
+
+   SQL_DETAIL = """
+   WITH base AS (
+     SELECT
+       t.*,
+       CASE
+         WHEN t.signals IS NOT NULL AND json_valid(t.signals)
+         THEN json_type(t.signals)
+       END AS signals_json_type
+     FROM turns t
+   ),
+   typed AS (
+     SELECT
+       b.*,
+       CASE
+         WHEN b.signals_json_type = 'array' THEN b.signals
+         ELSE '[]'
+       END AS safe_signals
+     FROM base b
+   )
+   SELECT t.id, t.session_id, t.signals, t.signals_json_type
+   FROM typed t
+   WHERE t.provider = 'anthropic'
+     AND (
+       t.signals IS NULL
+       OR t.signals_json_type IS NULL
+       OR t.signals_json_type != 'array'
+     )
+   ORDER BY t.id;
+   """
+
+   con = sqlite3.connect(":memory:")
+   con.executescript(SQL_SETUP)
+   candidate, quarantine = con.execute(SQL_COUNTS).fetchone()
+   detail = con.execute(SQL_DETAIL).fetchall()
+   print(f"{candidate}|{quarantine}")
+   for row in detail:
+       print(row)
+   assert (candidate, quarantine) == (1, 3), (candidate, quarantine)
+   assert [r[0] for r in detail] == [2, 3, 4], detail
+   print("SMOKE_OK")
+   PY
+   ```
+
+   Success criteria for the smoke (CLI or Python): process exit `0`, counts `candidate=1` / `quarantine=3` (printed `1|3`), detail query returns the three quarantine rows without error, and **no** `malformed JSON` or `no such table: typed` error. If the smoke fails, do not run the inventory against a real DB until the SQL guards match this pattern.
 
 Stop here if you only needed an inventory. The remainder of this document is a future operator procedure.
 
