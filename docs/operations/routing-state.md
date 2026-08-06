@@ -10,12 +10,57 @@ Last verified: **2026-08-06**.
 
 ---
 
-## Current state: LiteLLM lane restored (2026-08-06), Claude lane still bypassed
+## Current state: BOTH lanes restored (2026-08-06)
 
 | lane | unit | port | upstream | in traffic path? |
 |---|---|---|---|---|
-| Claude | `cachelane-claude.service` | 127.0.0.1:7333 | `api.anthropic.com` (TLS) | **no** |
+| Claude | `cachelane-claude.service` | 127.0.0.1:7333 | `api.anthropic.com` (TLS) | **yes — restored 22:40, features-off passthrough** |
 | LiteLLM | `cachelane-litellm.service` | 127.0.0.1:7332 | `127.0.0.1:4000` (plain HTTP) | **yes — features-off passthrough, soaking** |
+
+### Claude lane — restored by the operator, 2026-08-06 22:40
+
+`ANTHROPIC_BASE_URL=http://127.0.0.1:7333` was added to `~/.claude/settings.json` `env` by the
+**operator**, not by the remediation flow. It went live at 22:40:29 without the LiteLLM soak
+that the plan had gated it behind — a gate that was itself the problem: it required ≥500
+proxied requests from organic dispatch traffic, which had accrued 6 in four hours, so the
+primary objective was effectively unreachable behind it. Recorded here because the plan's
+Stage 3 preconditions were *not* the reason this lane is live, and a future reader should not
+infer that they were satisfied.
+
+**Measured after the fact, and it passes.** 413 requests in the first ~25 minutes
+(398 × 2xx, 1 × 4xx, 2 aborted), and against the promotion table:
+
+| gate | value | bound | |
+|---|---|---|---|
+| `/healthz` max | 0.0365 s | < 0.25 | pass |
+| `/healthz` probe_success min | 1 | == 1 | pass |
+| event-loop lag p99 | 0.0104 s | < 0.05 | pass |
+| event-loop lag max | 0.119 s | < 0.25 | pass |
+| shed_total | 0 | == 0 | pass |
+| upstream errors | 0 | low | pass |
+| mutated turns | 0 | == 0 | pass |
+| **cache-hit ratio delta** | **+0.54 pp** | within 1 pp | pass |
+| sample size | 413 | ≥ 500 | **not yet met** |
+
+Cache-hit ratio *rose*: `claude-opus-5` 98.31% → 98.77%, `claude-sonnet-5` 97.29% → 99.12%
+(overall 98.25% → 98.79%). Since that is the direct measure of whether the proxy disturbs
+prefix stability against the native 1 h cache, it is the single most important reading here,
+and it says passthrough is not costing anything.
+
+**Three honest caveats on that result.** (1) The comparison is **pooled**, not bucketed by
+`input_tokens` decile as the plan requires — a shift in task mix could move it on its own, so
+treat +0.54 pp as "no evidence of harm", not as a measured improvement. (2) The post window is
+~25 minutes against a pre window of months, so it is far more sensitive to session composition.
+(3) The 2 aborted requests are consistent with deliberate operator interrupts during this
+session (two are on record) but have **not** been individually attributed to a client cancel,
+which Gate 4 requires.
+
+**The Stage 2a Class B canary never ran for this lane.** It was meant to prove the OAuth-bearer
+path (`~/.claude/.credentials.json` → `claudeAiOauth.accessToken`) survives the proxy, since
+`server.ts:1021`'s preservation of inbound `Authorization` had never been exercised with an
+OAuth bearer. 398 successful live responses are strictly stronger evidence than that probe
+would have produced, so the gap is closed empirically rather than synthetically — but it was
+closed by luck of sequencing, not by design.
 
 The LiteLLM lane was restored on 2026-08-06 after GATE A opened: `~/.pi/agent/models.json`
 `providers.litellm.baseUrl` is back to `http://127.0.0.1:7332/v1` (backup of the pre-restore
