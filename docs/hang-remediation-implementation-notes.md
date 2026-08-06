@@ -5,8 +5,23 @@ code; this records where implementing it proved it wrong, and what was done
 instead. Read it alongside the spec rather than in place of it — everything not
 mentioned here was built as specified.
 
-Nothing here is deployed. `/srv/cachelane` still runs `3883ee7`; production is
-held safe by the config flip of §4 (pruner off on both lanes), verified live.
+> **Deployment state — updated 2026-08-06.** The paragraph that stood here said *"Nothing here is
+> deployed. `/srv/cachelane` still runs `3883ee7`."* That was true on 2026-07-31 and is now
+> false. `/srv/cachelane` runs **`b7fc668`** (= repo HEAD, `INSTALLED_AT` 2026-08-05T19:39:40Z);
+> the deployed `dist/index.cjs` contains the `elision_mode` arm flag, the stateless
+> `cachelane:elided` transform, and `safeFallbackConfig`. **The code below is deployed.**
+>
+> What is *not* done is the observability last mile — `deploy/observability/` was never landed in
+> the Ansible source of truth, `/etc/vmagent/scrape.d/cachelane.yml` is absent, and none of the
+> nine alert rules exist on this host. The recurrence alarm this work designed is not armed.
+>
+> Production is held safe by configuration, not by the absence of code: as of 2026-08-06 both
+> homes carry `pruner.enabled: false`, `k_pruner: false`, `mutation_enabled: false` and an
+> explicit `elision_mode: "stateless"`. The Claude home previously had `pruner.enabled: true`,
+> leaving a single latch between it and the *legacy* pruner; that asymmetry is closed.
+>
+> Both proxies are also currently **out of the traffic path entirely** — the 2026-07-31 bypass
+> severed both lanes, not just Claude. See `docs/operations/routing-state.md`.
 
 ## Corrections to the spec
 

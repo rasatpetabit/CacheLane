@@ -9,7 +9,32 @@ plus **three rounds** of rigorous cross-vendor adversarial review:
 | 2 (2 reviewers) | `rework` | 5 major + 1 minor |
 | 3 (3 reviewers, 1 approve) | `rework` | 5 major |
 
-**Status:** awaiting spec approval. No production code written. **Date:** 2026-07-31
+**Status (updated 2026-08-06): SUPERSEDED — historical.** The line below was true when written
+and is now false; it is kept rather than deleted so the revision history reads honestly.
+
+> ~~**Status:** awaiting spec approval. No production code written. **Date:** 2026-07-31~~
+
+Most of §8 was subsequently built and deployed. As of 2026-08-06, `/srv/cachelane` runs
+`b7fc668` (= repo HEAD, `INSTALLED_AT` 2026-08-05T19:39:40Z), whose `dist/` carries the
+`elision_mode` arm flag, the stateless `cachelane:elided` transform, and `safeFallbackConfig`.
+
+| §8 step | state |
+|---|---|
+| 0 — config off both lanes | done (and hardened 2026-08-06: `elision_mode: "stateless"` added, `pruner.enabled` set false on the Claude home so both lanes carry all three latches off) |
+| 1 — tokenizer one-encoder-per-process | done + deployed (`0711d26`) |
+| 2(a) logger honours `CACHELANE_HOME` | done (`dc5925e`) |
+| 2(b) test suite off the production home | done (`5f73095`) |
+| 2(c) request spans / 2(d) `clientError` | done (`4433a22`) |
+| 2(e) `/metrics` | done (`cb907ed`) — verified live; note `cachelane_proxy_overhead_seconds` was deliberately **not** built, see C12 |
+| 2(f) vmagent scrape + vmalert rules | **written but NOT installed** — the files exist only at `deploy/observability/`; `/etc/vmagent/scrape.d/cachelane.yml` is absent and they were never landed in the Ansible source of truth |
+| 3 — bounds | done + deployed (`948e9a7`) |
+| 4 — Layer 1 + Layer 2 behind an arm | done + deployed (`e61102c`, `6cd4ae4`, `6793bb6`), config-gated **off** |
+| 5 — DB hygiene | partial: `quick_check` landed (`b682739`); MCP read-only still blocked by `expand` mutating `is_stub`; `VACUUM`/`wal_checkpoint` deferred |
+
+**Read `hang-remediation-implementation-notes.md` alongside this document** — it records C11–C19,
+nine places where implementing this spec proved the spec wrong. Where the two disagree, the
+implementation notes win. Remaining open work is scoped in `spec-hang-remediation-v5.md` rather
+than by revising this document.
 **Repo:** `/srv/dev/ai/cachelane` @ `main` = `3883ee7`
 
 **All fourteen findings across all three rounds landed on the design and gate sections. No
