@@ -301,6 +301,38 @@ because there are no arms.
 **Cost:** one feature flag, one transform invocation on a path that already exists, and three
 recorded fields. No production risk and no washout.
 
+### 2.8 Preliminary estimate from data already on disk — and why it does NOT settle the question
+
+Before building anything, the economics were computed directly from `block_metadata_json` on
+276 recorded turns. **Two defensible models give opposite answers**, and that is the finding.
+
+| model | assumption | result |
+|---|---|---|
+| **per-turn** | the prefix re-breaks every turn | mutation **loses**, 0/276 turns win, penalty/saving median **19×** |
+| **steady-state** | the elided form *is* the stable prefix; break is one-time per session | mutation **wins**, 3/3 sessions, median **+6.1%** of session cost |
+
+Both are internally consistent. They differ on one empirical quantity: **how often the prefix
+actually re-breaks under sustained mutation.** Agent traffic appends new tool output every turn;
+if each new elision re-breaks the prefix, the per-turn model holds. If elision reaches a steady
+state where the cached prefix is already the elided form, the steady-state model holds.
+
+Supporting numbers: mean saving **2,683** cost-units/turn, mean one-time transition cost
+**73,851**, so **break-even is ~28 turns** against an observed median session of **76 turns**.
+That is a plausible win with a thin margin — exactly the regime where guessing is worst.
+
+**This is decisive about method, not about the answer.** The discriminating variable cannot be
+observed in no-mutation data, because it is a property of running with mutation on. No
+reanalysis of existing turns will produce it. That is the specific thing shadow mode measures,
+and it is a much narrower build than a general experiment harness: instrument
+**prefix re-break frequency** and **steady-state elided-token volume**, and the two models
+collapse to one.
+
+The earlier per-turn number was nearly reported as "mutation loses 19:1, question settled". It
+would have been a confident, wrong conclusion drawn from a model that answers
+*"turn mutation on for one turn"* rather than *"run with mutation on"*. Recorded here as the
+caveat any future reader should apply to both numbers above: **n = 3 sessions** is far too small
+for the steady-state row to be more than indicative.
+
 ---
 
 ## 3. Provenance defect found during execution (new in v5)
