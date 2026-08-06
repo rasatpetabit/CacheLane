@@ -17,24 +17,66 @@ into `/etc` works until the next playbook run and then disappears, which is a
 worse failure than no monitoring at all: the alerts stop existing without
 anyone being told.
 
-The source of truth is `/srv/dev/petabit/sysadmin/observability`:
+The source of truth is `/srv/dev/petabit/sysadmin/observability`. **The two files
+land by different mechanisms** — an earlier version of this README said both go
+in a directory that the `vmagent` role sweeps, and that was wrong for the scrape
+fragment. Following it would have produced a committed file that nothing ever
+deployed.
 
-- scrape fragment → `vmagent/scrape.d/cachelane.yml`, deployed by the `vmagent`
-  role, which already copies every fragment in that directory;
-- alert rules → `vmalert/cachelane.yml`, deployed by the `vmalert` role.
+**Alert rules — a directory drop, no role needed.** Put `cachelane.yml` in
+`observability/vmalert/`. The `vmalert` role implements SEAM (d): it `find`s
+every `*.yml` in that directory and syncs the lot to `/etc/vmalert/rules/`,
+which vmalert loads via its `-rule=/etc/vmalert/rules/*.yml` glob. Each domain
+drops its own file and no role ever edits a shared one.
 
-That repository had uncommitted work in it when these files were written, so
-landing them there is a separate, deliberate step rather than something to fold
-into a CacheLane commit.
+**Scrape fragment — needs its own role.** The `vmagent` role creates
+`/etc/vmagent/scrape.d/` and deploys exactly one file into it, its own
+`_seam-fixture.yml`. It does **not** glob the directory. Every domain ships its
+own fragment from its own role — see
+`roles/litellm_gateway/tasks/main.yml:491`, which templates
+`scrape.d/litellm.yml.j2` straight to `/etc/vmagent/scrape.d/litellm.yml` and
+notifies a `Reload vmagent config` handler.
 
-For a temporary local test before that lands, copy both files into place and
-reload — accepting that Ansible will revert them:
+CacheLane's equivalent is `roles/cachelane/` in that repo (added 2026-08-06):
+`tasks/main.yml` plus `templates/scrape.d/cachelane.yml.j2`, gated on
+`inventory_hostname in cachelane_hosts`, tagged `[cachelane, vmagent]`, and
+auto-discovered through `meta/register.yml` by the `site.yml` seam. The lane
+list and ports live in `defaults/main.yml` rather than being hardcoded, and
+`instance` templates from `inventory_hostname` instead of a literal `epyc2`.
+
+Deploy both with a tag-scoped run — this deliberately avoids applying unrelated
+in-progress work elsewhere in that repo:
 
 ```bash
-sudo cp vmagent-scrape.d-cachelane.yml /etc/vmagent/scrape.d/cachelane.yml
-sudo cp vmalert-cachelane.yml          /etc/vmalert/rules/cachelane.yml
-sudo systemctl reload vmagent vmalert
+cd /srv/dev/petabit/sysadmin/observability/ansible
+ansible-playbook playbooks/site.yml --tags cachelane,vmalert --limit epyc2 --check --diff   # dry run
+ansible-playbook playbooks/site.yml --tags cachelane,vmalert --limit epyc2                  # apply
 ```
+
+The `cachelane` tag alone deploys only the scrape fragment; the rules need
+`vmalert` as well, because the sync task belongs to that role.
+
+**Status: landed and verified 2026-08-06.** Both files are deployed through the
+Ansible path above, not hand-copied. Verified live: two scrape targets
+(`lane=litellm`, `lane=claude`) reporting `health: "up"` with empty `lastError`,
+`up{job="cachelane"} == 1` for both lanes in VictoriaMetrics, and all nine rules
+loaded and `inactive` on a healthy system.
+
+The copies in *this* directory are now the upstream reference for what the role
+templates render — keep them in step with
+`roles/cachelane/templates/scrape.d/cachelane.yml.j2` and
+`observability/vmalert/cachelane.yml`, or delete them in favour of pointing at
+those. Hand-copying them into `/etc` is not a supported path: both target
+directories are Ansible-managed, so a manual copy survives only until the next
+playbook run and then vanishes, taking the alerts with it and leaving silence
+that reads exactly like health.
+
+One caveat found while verifying: `CacheLaneScrapeConfigMissing` goes `pending`
+for a minute or two immediately after first deployment. That is the `absent()`
+rule evaluating against a moment before the `up` series existed — vmalert
+evaluates slightly behind ingest. It clears on its own well inside the rule's
+`for: 10m`, so it never pages, but do not mistake it for a broken rule on a
+fresh install.
 
 Verify the targets are actually up before believing any of it — a scrape config
 that loads but resolves nothing reports as silence, not as an error:
