@@ -216,14 +216,44 @@ VictoriaMetrics, but nobody is paged. That is adequate for an attended soak and 
 an unattended one. The fix is named in the config header: place a Slack webhook secret on-host
 and re-run the `alertmanager` role.
 
-### Deliberately waived (2026-08-06, operator decision)
+### `CacheLaneEventLoopBlocked` — proven end to end (2026-08-06)
 
-The synthetic-stall end-to-end proof of `CacheLaneEventLoopBlocked` — standing up a scratch
-instance, inducing a real multi-second synchronous stall, and confirming the metric climbs, is
-scraped, and the alert fires — was **not** performed. The rule's expression, its threshold, and
-the existence and shape of the metric it reads were all verified statically, but the full
-emit → scrape → evaluate → fire chain has never been exercised for that specific alert. Treat
-it as untested until it is.
+Initially waived, then performed. The critical alert that is the direct signature of the
+July 31 incident has now been fired in anger. `scripts/canary/prove-eventloop-alert.sh`
+stands up a scratch instance, induces a **real** 6-second synchronous block of the event loop
+(a busy-wait via `--require stall-preload.js` — not a sleep, which would yield the loop and
+measure nothing), registers an ephemeral scrape target, and watches the whole chain:
+
+```
+t+40s   lag_max=0.013746175   inactive     <- baseline
+t+50s   lag_max=6.006243327   inactive     <- stall measured by monitorEventLoopDelay
+t+150s  lag_max=6.006243327   pending      <- rule matched, `for: 2m` started
+t+270s  lag_max=6.006243327   firing       <- PROOF
+```
+
+vmalert reported the alert with `lane=stalltest` and `value=6.006243`, so the label plumbing
+and the value both survive the round trip. Everything is torn down by an EXIT trap that runs
+on every path including failure, and it verifies its own cleanup.
+
+**Two things this proof taught that a static check could not:**
+
+1. **`job_name` must be unique across every file in `scrape.d`.** The first attempt reused
+   `job_name: cachelane` to match the alert's selector. vmagent rejects duplicate job names
+   outright — it crash-looped 13 times and **stopped scraping everything on the host** until
+   the file was removed. Monitoring went down while the monitoring test ran. The script now
+   uses a unique job name and rewrites the `job` *label* via `relabel_configs`, and gates on
+   vmagent being healthy *and* still scraping production before continuing.
+2. **The alert keeps firing for ~5 minutes after the target disappears.** VictoriaMetrics'
+   instant-query lookback window keeps serving the last sample, so the rule stays true with
+   nothing left to scrape. Measured: last sample 22:52:46, alert cleared at 22:58:30. This is
+   correct behaviour and arguably desirable during a real incident — a proxy that dies from
+   the stall does not silence its own alarm — but do not read a lingering firing state
+   immediately after a teardown as a stuck alert.
+
+The remaining untested rules are the saturation and upstream ones
+(`CacheLaneInflightHigh`, `CacheLaneSheddingLoad`, `CacheLaneMemoryHigh`,
+`CacheLaneUpstreamErrors`, `CacheLaneAbortedRequests`). Their metrics were confirmed to exist
+and their expressions to parse, but none has been fired.
 
 ## The deadlock this creates
 

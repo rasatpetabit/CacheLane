@@ -71,6 +71,37 @@ repo and asserted by two test suites. A bogus key returning 200 is therefore *co
 upstream behaviour*. B3 checks only that the proxied status **equals** the direct status: that
 CacheLane neither adds nor removes auth behaviour. Do not "fix" it into a 401 assertion.
 
+## `prove-eventloop-alert.sh` — the recurrence alarm's fire proof
+
+Separate from the cutover canaries. This proves that `CacheLaneEventLoopBlocked` — the alert
+that is the direct signature of the July 2026 hang — actually fires, by inducing a real
+6-second synchronous block in a scratch instance and watching the chain
+emit → scrape → store → evaluate → fire.
+
+```bash
+sudo -v && python3 -c ''            # needs passwordless sudo for the scrape fragment
+bash scripts/canary/prove-eventloop-alert.sh   # ~6 minutes
+```
+
+**Why a busy-wait and not a sleep.** `metrics.ts:56` samples with `monitorEventLoopDelay()`,
+which measures *actual* loop delay. A `setTimeout` yields the loop and registers nothing; only
+a synchronous spin reproduces the incident's failure mode (a Tiktoken WASM encoder rebuilt per
+prunable block, ~45.7 ms each, summing to seconds).
+
+**Why `kill -STOP` is not a substitute.** Stopping the process makes it stop serving
+`/metrics` entirely, so the target goes *unscrapeable* — that exercises `CacheLaneProxyDown`
+and `CacheLaneScrapeConfigMissing`. Lag alerting needs a process that is alive and still
+answering scrapes while its loop is blocked. Two different failure modes, two different tests.
+
+**Two hazards this script exists to encode.** `job_name` must be unique across every file in
+`/etc/vmagent/scrape.d/` — reusing `cachelane` crash-loops vmagent and takes down scraping for
+the whole host, so the script uses a unique job name and relabels `job` to `cachelane` instead.
+And after teardown the alert keeps firing for ~5 minutes because VictoriaMetrics' lookback
+window still serves the last sample; that is correct, not a stuck alert.
+
+The EXIT trap removes the fragment, restarts vmagent, kills the scratch instance, and then
+*verifies* all of that — including that production lanes are still being scraped.
+
 ## Per-lane, not once
 
 Run the canary against **the lane being cut over**. The Claude lane and the LiteLLM lane use
