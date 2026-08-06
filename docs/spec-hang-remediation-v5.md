@@ -123,7 +123,45 @@ not by review — see §7.
 
 ---
 
-## 2. Gate 5 — pre-registered design
+## 2. Gate 5 — DESIGN REJECTED BY REVIEW; see §2.0 before reading further
+
+> **§2.0 — Status of this section (2026-08-06, after cross-vendor review round 1).**
+>
+> The randomized design below received a **`rework`** verdict with three blocking findings, all
+> of which triage as legitimate and are **accepted**:
+>
+> 1. **The estimator is blind to the treatment.** `Σcost / Σlogical` uses a denominator that
+>    elision itself shrinks. If treatment scales every token category by *q*, both numerator and
+>    denominator scale by *q* and the metric is unchanged while real spend falls by *q*. The
+>    normalization was added for variance reduction and it divides away the effect being
+>    measured.
+> 2. **Clustering error.** Treatment is assigned per 1 h block but §2.2's power was bootstrapped
+>    per turn. At 250–500 turns/block, n = 1 000/arm is **2–4 independent clusters per arm** —
+>    the quoted CI does not hold, and deterministic alternation supplies no randomization.
+> 3. **Post-treatment stratification.** §2.4 buckets on `turns.input_tokens`, which is
+>    provider-reported usage measured *after* mutation. Conditioning on a treatment-affected
+>    variable induces selection bias; the covariate must be a pre-mutation request size.
+>
+> **Fixing (2) exposes a feasibility wall.** Measured on live data, per-session cost has
+> **CV = 4.88**, so a correct cluster-level test needs **1 525 sessions/arm to resolve a 50%
+> effect** — ~3 050 sessions at ~35–40 sessions/day is **≈80 days**. A 20% effect needs
+> ~9 500/arm, over a year. Shortening blocks to raise the cluster count collides with the
+> ≥1 h washout that the native cache TTL forces.
+>
+> **Conclusion: no randomized field experiment can answer Gate 5 at this traffic volume.**
+> Publishing an underpowered version would produce exactly the confident null that §1.1 exists
+> to prevent. The ETA is stated here rather than discovered later, per the rule that every
+> numeric gate carries its computed ETA.
+>
+> **Proposed replacement — shadow-mode counterfactual (§2.7).** Do not run arms at all.
+> Compute, per turn, what elision *would* have removed and what it *would* have cost, while
+> continuing to forward the unmutated body. Every turn then yields a **paired**
+> (actual, counterfactual) observation on identical traffic, which eliminates between-session
+> variance — the entire reason the randomized design is infeasible — and carries **zero
+> production risk**, since nothing is mutated and no cache prefix is broken.
+>
+> The sections below are retained as the rejected design and the reasoning that produced it.
+> They are **not** approved and must not be executed.
 
 Everything in this section is fixed **before** the first measurement. Numbers come from 619
 real post-cutover turns on the Claude lane (2026-08-06), not from estimates.
@@ -223,6 +261,45 @@ Tuning `k`, the Layer 3 `K_eff` band, or retiring the pruner outright (v4 §7 op
 
 Record the decision, the measured effect size, its CI, and the arm provenance in
 `operations/routing-state.md`.
+
+---
+
+## 2.7 Shadow-mode counterfactual — the proposed replacement design
+
+**Mechanism.** A fourth latch, `features.elision_shadow`. When set, the stateless arm runs its
+transform, records what it *would* have elided, and then **discards the mutated body and
+forwards the client's original**. Nothing reaches the provider differently; no prefix is broken.
+
+**Per turn, record:** `shadow_elided_tokens` (removed by the transform),
+`shadow_prefix_break_index` (earliest position the mutation would have disturbed), and the
+per-block token counts at and after that index.
+
+**The estimate is then arithmetic, not inference.** Both sides of the economic question are
+computable from one turn's own recorded data:
+
+- **Saving** = `shadow_elided_tokens` × (the rate that would have applied) — known exactly,
+  because the transform is deterministic.
+- **Cost** = tokens at/after `shadow_prefix_break_index` that were served as `cache_read` at
+  0.10× but would have required re-creation at 1.25×/2.00× — known exactly from the recorded
+  breakpoint hashes and usage.
+
+Net = saving − cost, **per turn, paired**. There is no between-session variance to overcome
+because both quantities come from the same turn, so the required sample is smaller by orders of
+magnitude. A few thousand turns — roughly one active day — gives a tight interval.
+
+**What it cannot capture, stated honestly.** Second-order effects where mutation changes model
+behaviour and therefore the subsequent conversation. Shadow mode holds the trajectory fixed, so
+it measures the direct price effect only. That is the dominant term and the one the question is
+actually about, but the limitation must be declared rather than assumed away.
+
+**Why it also dissolves the other two blockers.** No denominator is needed, so finding (1) does
+not arise; and the comparison is within-turn, so there is no post-treatment stratification and
+finding (3) does not arise. It also sidesteps §1.4's 65% provenance coverage as a *bias* problem
+— coverage still limits which turns are measurable, but missingness can no longer differ by arm
+because there are no arms.
+
+**Cost:** one feature flag, one transform invocation on a path that already exists, and three
+recorded fields. No production risk and no washout.
 
 ---
 
