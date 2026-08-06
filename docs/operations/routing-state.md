@@ -95,29 +95,25 @@ and a future reader should not read it as one.
 symlink; turns observed during the bypass window) — harmless, and their traffic counts toward
 the soak denominators.
 
-The Claude lane remains bypassed. CacheLane's only role there is post-hoc usage metering via
-the Claude Code Stop and UserPromptSubmit hooks.
+### How each lane is wired (both now IN the traffic path)
 
-Evidence, taken 2026-08-06: `:7333` had served 3 requests since restart, all `4xx`; `:7332` had
-served 2. Those are healthcheck probes. `cachelane_requests_total` on both lanes shows nothing
-resembling real traffic.
+> **Historical note.** Everything below describes the wiring points. Until 2026-08-06 both were
+> unset and this section described how each lane was *bypassed*; that text was left in place
+> after the restorations and briefly contradicted the top of this document. Both are now set.
 
-### How each lane is bypassed
+**Claude lane.** `ANTHROPIC_BASE_URL=http://127.0.0.1:7333` in `~/.claude/settings.json` `env`.
+This is the single wiring point, and it takes effect for **new sessions only** — a running
+session keeps whatever path it started with, so never read a live session's behaviour as
+evidence about a change made after it started. Unset it to bypass.
 
-**Claude lane.** Claude Code reaches `api.anthropic.com` directly because `ANTHROPIC_BASE_URL` is
-set **nowhere** — not in `~/.claude/settings.json` `env`, not in `~/.bashrc`, not in `~/.profile`,
-and not in the live process environment. Setting it is the single wiring point that restores the
-lane, and it takes effect for **new sessions only**.
+**LiteLLM lane.** `providers.litellm.baseUrl` in `~/.pi/agent/models.json`, currently
+`http://127.0.0.1:7332/v1`. Takes effect on the next dispatch. Point it at
+`http://192.168.109.71:4000/v1` to bypass.
 
-**LiteLLM lane.** `~/.pi/agent/models.json` no longer points at the proxy. The pre-bypass value is
-preserved at `~/.pi/agent/models.json.bak-pre-cachelane-bypass-20260731T220751Z:93`:
-
-```json
-"baseUrl": "http://127.0.0.1:7332/v1"
-```
-
-Diff the backup against the live file before restoring — later unrelated edits may have landed in
-`models.json` since, and the backup should not be restored wholesale over them.
+Backups of both pre-restoration states:
+`~/.pi/agent/models.json.bak-pre-cachelane-restore-20260806T044602Z` and the older
+`.bak-pre-cachelane-bypass-20260731T220751Z`. Diff before restoring either — unrelated edits
+have landed in `models.json` since, so it must not be restored wholesale.
 
 ### Why
 
