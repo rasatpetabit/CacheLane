@@ -10,16 +10,37 @@ Last verified: **2026-08-06**.
 
 ---
 
-## Current state: both lanes bypassed
-
-Both proxies are **running and healthy** but carry **no production traffic**. CacheLane is doing
-exactly one job right now: post-hoc usage metering via the Claude Code Stop and
-UserPromptSubmit hooks.
+## Current state: LiteLLM lane restored (2026-08-06), Claude lane still bypassed
 
 | lane | unit | port | upstream | in traffic path? |
 |---|---|---|---|---|
 | Claude | `cachelane-claude.service` | 127.0.0.1:7333 | `api.anthropic.com` (TLS) | **no** |
-| LiteLLM | `cachelane-litellm.service` | 127.0.0.1:7332 | `127.0.0.1:4000` (plain HTTP) | **no** |
+| LiteLLM | `cachelane-litellm.service` | 127.0.0.1:7332 | `127.0.0.1:4000` (plain HTTP) | **yes — features-off passthrough, soaking** |
+
+The LiteLLM lane was restored on 2026-08-06 after GATE A opened: `~/.pi/agent/models.json`
+`providers.litellm.baseUrl` is back to `http://127.0.0.1:7332/v1` (backup of the pre-restore
+file: `models.json.bak-pre-cachelane-restore-20260806T044602Z`). Preconditions executed first:
+
+- **Stage 2a Class A canary** — 7/7 probes PASS against the deployed artifact (`b7fc668`) with
+  a scratch home and a local mock upstream: header fidelity, response byte-equality,
+  incremental SSE, 400/429/500 propagation with `retry-after`, hard-abort propagation upstream
+  in 0.76 s, 1 MB body integrity.
+- **Stage 2a Class B canary** — real-credential smoke through a scratch proxy to the real
+  LiteLLM: roster, non-streaming, streaming-to-`[DONE]` all pass. (A bad-key probe returned
+  200 — but it does so *direct to LiteLLM too*; that is upstream behaviour faithfully
+  mirrored, not a proxy fault. See the LiteLLM exposure note below.)
+- **Traffic proof** — a real `pi -p` dispatch recorded as a new turn (`request_mutated: 0`).
+- **Revert proof** — baseUrl flipped back once deliberately: the dispatch succeeded direct and
+  the proxy recorded zero turns; then re-restored. The revert is one edit and it works.
+
+Two side observations from the cutover: **(1)** LiteLLM on `:4000` binds `0.0.0.0` and accepts
+requests with a bogus (or presumably no) key — an unauthenticated LAN-reachable LLM gateway;
+out of scope here but worth its own look. **(2)** Occasional non-Pi consumers already hit
+`:7332` (e.g. the `~/.cachelane-smoke` lane symlink; turns observed during the bypass window)
+— harmless, and their traffic counts toward the soak denominators.
+
+The Claude lane remains bypassed. CacheLane's only role there is post-hoc usage metering via
+the Claude Code Stop and UserPromptSubmit hooks.
 
 Evidence, taken 2026-08-06: `:7333` had served 3 requests since restart, all `4xx`; `:7332` had
 served 2. Those are healthcheck probes. `cachelane_requests_total` on both lanes shows nothing
