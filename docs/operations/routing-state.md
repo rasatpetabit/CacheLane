@@ -135,6 +135,58 @@ about, not a deliberate scope decision.
 
 ---
 
+## MUTATION ENABLED on the Claude lane — 2026-08-06 07:06Z (operator directive)
+
+All three latches were opened on `~/.cachelane-claude/config.json` to start collecting real
+elision economics. Backup: `config.json.bak-pre-mutation-20260806T070631Z`.
+
+| flag | value |
+|---|---|
+| `pruner.enabled` | **true** |
+| `features.k_pruner` | **true** |
+| `features.mutation_enabled` | **true** |
+| `features.elision_mode` | `stateless` |
+
+**Safety check performed before flipping.** `pre-request.ts:351` dispatches on
+`elision_mode === "stateless"` → `handleStateless()`, so opening the latches routes to the
+audited stateless transform, **not** the legacy `countTokens`-per-block path that caused the
+July 31 hang. Verified in source before the edit, not assumed.
+
+**Arm proven live, not assumed.** A synthetic tool-heavy request recorded
+`elision_active: 1`, `experiment_arm: passthrough`, `elision_mode: stateless`. This matters
+because an arm that silently stands down produces a confident-looking null — the exact failure
+`spec-hang-remediation-v5.md` §1.2 exists to prevent.
+
+**Elision engages only on REPEATED context.** The same probe recorded `elided_bytes: 0`, because
+a block is only elidable once it has a refetch handle — CacheLane will not remove content it
+cannot restore. So a first-time-seen tool output is never elided, and one-shot synthetic
+requests will always show zero. Real multi-turn sessions that resend prior tool output are what
+generate elisions. **Do not read `elided_bytes: 0` on a fresh conversation as the feature being
+broken.**
+
+**Revert, one edit, no restart** (config is re-read per request, `server.ts:797`): set the three
+latches back to `false`, or restore the backup above.
+
+**What to watch while it collects:** `CacheLaneEventLoopBlocked` (proven to fire),
+`cachelane_event_loop_lag_seconds_max` on `lane="claude"`, and `turns.request_mutated`
+transitioning from 0 to non-zero — the first mutated turn is the real go-live signal.
+
+### Alerting gap found 2026-08-06: upstream 5xx do not raise the upstream-error alert
+
+At 23:22 the Claude lane recorded a burst of **177 × 5xx in a single 5-minute window** (almost
+certainly upstream overload; the proxy forwarded them faithfully). Over the same period
+`cachelane_upstream_errors_total` incremented by **2**.
+
+`CacheLaneUpstreamErrors` keys on `cachelane_upstream_errors_total`, so it did **not** fire and
+would not fire on a comparable event. That counter appears to track transport-level failures
+(`kind="error"`, `kind="timeout"`), not upstream-returned 5xx status codes. The result is that
+the most common upstream failure mode — the provider returning 529/500 under load — is
+invisible to alerting.
+
+Recommended: add a rule on `rate(cachelane_requests_total{status="5xx"}[5m])`, or widen the
+existing one. Deliberately not changed here, because altering alert semantics on a live
+recurrence alarm deserves its own review rather than being folded into an unrelated change.
+
 ## Feature latches
 
 The stateless elision arm requires **all three** of these to be true before it elides anything.
@@ -143,10 +195,14 @@ The stateless elision arm requires **all three** of these to be true before it e
 
 | flag | Claude home | LiteLLM home |
 |---|---|---|
-| `pruner.enabled` | `false` | `false` |
-| `features.k_pruner` | `false` | `false` |
-| `features.mutation_enabled` | `false` | `false` |
+| `pruner.enabled` | **`true`** (2026-08-06) | `false` |
+| `features.k_pruner` | **`true`** (2026-08-06) | `false` |
+| `features.mutation_enabled` | **`true`** (2026-08-06) | `false` |
 | `features.elision_mode` | `"stateless"` | `"stateless"` |
+
+The Claude-lane values above were flipped deliberately on 2026-08-06 to begin collecting
+elision economics — see "MUTATION ENABLED" near the top of this document. The LiteLLM lane
+remains in the safe posture.
 
 Config homes: `~/.cachelane-claude` and `~/.cachelane-litellm`. Note the symlinks —
 `~/.cachelane` → `.cachelane-claude`; `~/.cachelane-openai` and `~/.cachelane-smoke` →
