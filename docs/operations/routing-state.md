@@ -33,11 +33,22 @@ file: `models.json.bak-pre-cachelane-restore-20260806T044602Z`). Preconditions e
 - **Revert proof** — baseUrl flipped back once deliberately: the dispatch succeeded direct and
   the proxy recorded zero turns; then re-restored. The revert is one edit and it works.
 
-Two side observations from the cutover: **(1)** LiteLLM on `:4000` binds `0.0.0.0` and accepts
-requests with a bogus (or presumably no) key — an unauthenticated LAN-reachable LLM gateway;
-out of scope here but worth its own look. **(2)** Occasional non-Pi consumers already hit
-`:7332` (e.g. the `~/.cachelane-smoke` lane symlink; turns observed during the bypass window)
-— harmless, and their traffic counts toward the soak denominators.
+Two side observations from the cutover:
+
+**(1) The gateway's open-auth posture is intentional — do not "fix" it.** The B3 canary probe
+noted that a bogus key returns 200. That is the fleet's deliberate design, not a proxy fault
+and not a defect: the gateway runs on a trusted network, and the auth-less production slot is
+enforced on purpose in three places — `lib/compile-litellm.mjs:703-709` omits
+`master_key`/`database_url` from the prod branch with a comment saying so, and both
+`test/compile-litellm.mjs:366` and
+`roles/litellm_gateway/tests/test_litellm_gateway.py:156` assert their *absence*. Confirmed by
+the operator on 2026-08-06. The probe is retained in the canary only as a fidelity check that
+CacheLane mirrors upstream behaviour unchanged; **it is not a pass/fail security assertion**,
+and a future reader should not read it as one.
+
+**(2)** Occasional non-Pi consumers already hit `:7332` (e.g. the `~/.cachelane-smoke` lane
+symlink; turns observed during the bypass window) — harmless, and their traffic counts toward
+the soak denominators.
 
 The Claude lane remains bypassed. CacheLane's only role there is post-hoc usage metering via
 the Claude Code Stop and UserPromptSubmit hooks.
