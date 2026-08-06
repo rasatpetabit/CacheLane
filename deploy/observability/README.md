@@ -59,8 +59,9 @@ The `cachelane` tag alone deploys only the scrape fragment; the rules need
 **Status: landed and verified 2026-08-06.** Both files are deployed through the
 Ansible path above, not hand-copied. Verified live: two scrape targets
 (`lane=litellm`, `lane=claude`) reporting `health: "up"` with empty `lastError`,
-`up{job="cachelane"} == 1` for both lanes in VictoriaMetrics, and all nine rules
-loaded and `inactive` on a healthy system.
+`up{job="cachelane"} == 1` for both lanes in VictoriaMetrics, and all rules
+loaded and `inactive` on a healthy system (nine at first landing; a tenth,
+`CacheLaneHealthcheckStale`, added later the same day — see below).
 
 The copies in *this* directory are now the upstream reference for what the role
 templates render — keep them in step with
@@ -105,6 +106,7 @@ loop. So the latency alert is on lag, at the 250 ms threshold the spec named.
 |---|---|---|
 | `CacheLaneProxyDown` | target unscrapeable 3m | warning |
 | `CacheLaneScrapeConfigMissing` | `up` series absent for a lane 10m | warning |
+| `CacheLaneHealthcheckStale` | healthcheck timestamp frozen >180 s, or series absent | warning |
 | `CacheLaneEventLoopStalled` | lag p99 > 250 ms for 5m | warning |
 | `CacheLaneEventLoopBlocked` | lag max > 3 s for 2m | critical |
 | `CacheLaneInflightHigh` | in-flight > 12 for 5m | warning |

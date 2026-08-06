@@ -82,6 +82,37 @@ groups:
             cachelane repo. Every other alert in this file is silent while this
             one is firing.
 
+      # The /healthz probe gates in the remediation plan read
+      # cachelane_healthz_probe_{duration_seconds,success} from node_exporter's
+      # textfile collector, written by cachelane-healthcheck.timer every 60 s.
+      # If that timer stops, node_exporter keeps serving the LAST-WRITTEN file
+      # forever — probe_success stays 1 and the duration stays frozen at a good
+      # value, so every gate built on them passes vacuously while nothing is
+      # probing. The timestamp the healthcheck writes on each run is the only
+      # thing that can tell "healthy" apart from "stale", and this rule is its
+      # only consumer. absent() covers the file being deleted outright, which
+      # removes the series entirely and would otherwise mute the comparison.
+      - alert: CacheLaneHealthcheckStale
+        expr: |
+          (time() - cachelane_healthcheck_last_run_timestamp_seconds > 180)
+          or absent(cachelane_healthcheck_last_run_timestamp_seconds)
+        for: 2m
+        labels:
+          severity: warning
+          service: cachelane
+          domain: llm
+        annotations:
+          summary: >-
+            CacheLane healthcheck probes have gone stale
+          description: >-
+            cachelane_healthcheck_last_run_timestamp_seconds has not advanced
+            for 3+ timer intervals (or the textfile is gone). The /healthz
+            probe metrics still being served are leftovers from the last
+            successful run and must not be trusted — including by the
+            remediation plan's promotion gates. Check
+            `systemctl status cachelane-healthcheck.timer` and
+            `journalctl -u cachelane-healthcheck.service -n 50`.
+
   # --------------------------------------------------------------------------
   # The failure this monitoring exists for
   # --------------------------------------------------------------------------

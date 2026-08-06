@@ -26,7 +26,7 @@ Most of §8 was subsequently built and deployed. As of 2026-08-06, `/srv/cachela
 | 2(b) test suite off the production home | done (`5f73095`) |
 | 2(c) request spans / 2(d) `clientError` | done (`4433a22`) |
 | 2(e) `/metrics` | done (`cb907ed`) — verified live; note `cachelane_proxy_overhead_seconds` was deliberately **not** built, see C12 |
-| 2(f) vmagent scrape + vmalert rules | **written but NOT installed** — the files exist only at `deploy/observability/`; `/etc/vmagent/scrape.d/cachelane.yml` is absent and they were never landed in the Ansible source of truth |
+| 2(f) vmagent scrape + vmalert rules | done (2026-08-06, later the same day) — landed in the Ansible source of truth (`roles/cachelane/` + `observability/vmalert/cachelane.yml` in the sysadmin repo) and deployed; both targets up, all rules loaded. See `docs/operations/routing-state.md` |
 | 3 — bounds | done + deployed (`948e9a7`) |
 | 4 — Layer 1 + Layer 2 behind an arm | done + deployed (`e61102c`, `6cd4ae4`, `6793bb6`), config-gated **off** |
 | 5 — DB hygiene | partial: `quick_check` landed (`b682739`); MCP read-only still blocked by `expand` mutating `is_stub`; `VACUUM`/`wal_checkpoint` deferred |

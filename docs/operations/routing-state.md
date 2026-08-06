@@ -120,7 +120,7 @@ session.
 
 ## Blocker: the recurrence alarm is not armed
 
-`deploy/observability/` contains a vmagent scrape fragment and nine vmalert rules — including
+`deploy/observability/` contains a vmagent scrape fragment and a set of vmalert rules — including
 `CacheLaneEventLoopBlocked`, the direct signature of the July 31 failure. **None of it is
 installed.** `/etc/vmagent/scrape.d/cachelane.yml` is absent, no cachelane rules exist under
 `/etc/vmalert/rules/`, and the files were never landed in the Ansible source of truth at
@@ -144,7 +144,8 @@ does sweep. Deploy with `--tags cachelane,vmalert --limit epyc2`; re-running rep
 Verified live: both targets `health: "up"` with empty `lastError`; `up{job="cachelane"} == 1`
 for `lane=litellm` and `lane=claude`; all nine rules loaded and `inactive`. Every metric the
 rules reference was cross-checked against the exported set first, so none of them is an alert
-that can never fire.
+that can never fire. A tenth rule, `CacheLaneHealthcheckStale`, was added later the same day —
+see below.
 
 `/healthz` probe latency is exported too, but **not** via blackbox_exporter — CacheLane binds
 loopback only and blackbox runs on a different, pinned host, so it cannot reach these ports.
@@ -152,6 +153,24 @@ Instead `cachelane-healthcheck.sh` (already probing both lanes every 60 s) now t
 and writes `cachelane_healthz_probe_duration_seconds{lane=}` /
 `cachelane_healthz_probe_success{lane=}` to node_exporter's textfile collector. Measured ~6 ms
 on both lanes against a 250 ms gate.
+
+### Post-install review findings (2026-08-06, second pass)
+
+**The probe metrics could pass gates vacuously — closed.** If
+`cachelane-healthcheck.timer` stops, node_exporter keeps serving the last-written textfile
+forever: `cachelane_healthz_probe_success` stays `1` and the duration stays frozen at a good
+value while nothing is probing. Every promotion gate built on those series would pass on stale
+data. `CacheLaneHealthcheckStale` (the tenth rule) now fires when
+`cachelane_healthcheck_last_run_timestamp_seconds` stops advancing for 3+ timer intervals, or
+when the series disappears outright. Any soak-window gate read must confirm this alert did not
+fire during the window.
+
+**Installer landmine: never run `install-runtime.sh` from `/srv/cachelane`.** The installer
+copies `$REPO_ROOT/scripts/cachelane-healthcheck.sh` to `/usr/local/sbin/cachelane-healthcheck`
+(`install-runtime.sh:232`). The operative copy in `/usr/local/sbin` is current, but
+`/srv/cachelane` is a `b7fc668` snapshot whose `scripts/` copy predates the metric export — an
+install run *from that tree* would silently revert it. Install from `/srv/dev/ai/cachelane`
+only, or redeploy `/srv/cachelane` to HEAD first.
 
 ### Known gap: alerts evaluate but notify nobody
 

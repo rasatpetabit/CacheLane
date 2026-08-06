@@ -11,9 +11,12 @@ mentioned here was built as specified.
 > the deployed `dist/index.cjs` contains the `elision_mode` arm flag, the stateless
 > `cachelane:elided` transform, and `safeFallbackConfig`. **The code below is deployed.**
 >
-> What is *not* done is the observability last mile — `deploy/observability/` was never landed in
-> the Ansible source of truth, `/etc/vmagent/scrape.d/cachelane.yml` is absent, and none of the
-> nine alert rules exist on this host. The recurrence alarm this work designed is not armed.
+> The observability last mile was closed later the same day (2026-08-06): the scrape fragment
+> and alert rules were landed in the Ansible source of truth (`roles/cachelane/` and
+> `observability/vmalert/cachelane.yml` in the sysadmin repo) and deployed — both lanes scraped,
+> all rules loaded, `/healthz` probe latency exported via the healthcheck's textfile metrics.
+> The recurrence alarm is armed, though Alertmanager is host-wide in bare mode, so firing
+> alerts notify nobody. Current state lives in `docs/operations/routing-state.md`.
 >
 > Production is held safe by configuration, not by the absence of code: as of 2026-08-06 both
 > homes carry `pruner.enabled: false`, `k_pruner: false`, `mutation_enabled: false` and an
