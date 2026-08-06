@@ -133,6 +133,47 @@ the `vmagent` and `vmalert` roles, per `deploy/observability/README.md`.
 Restoring traffic to a proxy whose recurrence alarm does not exist is how the July 31 incident
 gets repeated silently. Install first.
 
+### Update 2026-08-06 — installed and verified
+
+Landed through Ansible, not hand-copied. The scrape fragment needed a new `cachelane` role
+(`roles/cachelane/` in the sysadmin repo) because the `vmagent` role deploys only its own
+`_seam-fixture.yml` and does **not** glob `scrape.d` — every domain ships its own fragment. The
+alert rules were a plain directory drop into `observability/vmalert/`, which the `vmalert` role
+does sweep. Deploy with `--tags cachelane,vmalert --limit epyc2`; re-running reports `changed=0`.
+
+Verified live: both targets `health: "up"` with empty `lastError`; `up{job="cachelane"} == 1`
+for `lane=litellm` and `lane=claude`; all nine rules loaded and `inactive`. Every metric the
+rules reference was cross-checked against the exported set first, so none of them is an alert
+that can never fire.
+
+`/healthz` probe latency is exported too, but **not** via blackbox_exporter — CacheLane binds
+loopback only and blackbox runs on a different, pinned host, so it cannot reach these ports.
+Instead `cachelane-healthcheck.sh` (already probing both lanes every 60 s) now times the probe
+and writes `cachelane_healthz_probe_duration_seconds{lane=}` /
+`cachelane_healthz_probe_success{lane=}` to node_exporter's textfile collector. Measured ~6 ms
+on both lanes against a 250 ms gate.
+
+### Known gap: alerts evaluate but notify nobody
+
+`/etc/alertmanager/alertmanager.yml` is in **bare mode** — a single `null-default` receiver with
+no notifier configured. Its own generated header says alerts "group here and are dropped". This
+is host-wide and pre-existing, not specific to CacheLane: *every* alert on this machine is
+currently silent at the notification layer.
+
+So a firing CacheLane alert is observable in vmalert (`:8880/vmalert`) and queryable in
+VictoriaMetrics, but nobody is paged. That is adequate for an attended soak and inadequate for
+an unattended one. The fix is named in the config header: place a Slack webhook secret on-host
+and re-run the `alertmanager` role.
+
+### Deliberately waived (2026-08-06, operator decision)
+
+The synthetic-stall end-to-end proof of `CacheLaneEventLoopBlocked` — standing up a scratch
+instance, inducing a real multi-second synchronous stall, and confirming the metric climbs, is
+scraped, and the alert fires — was **not** performed. The rule's expression, its threshold, and
+the existence and shape of the metric it reads were all verified statically, but the full
+emit → scrape → evaluate → fire chain has never been exercised for that specific alert. Treat
+it as untested until it is.
+
 ## The deadlock this creates
 
 The v4 gates that would authorize re-enabling elision — the primary `/healthz` gate, Gate 1

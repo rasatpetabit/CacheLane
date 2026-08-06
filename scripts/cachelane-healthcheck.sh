@@ -45,10 +45,56 @@ reset_failure_count() {
   rm -f "$(failure_file "$1")"
 }
 
+# Probe latency is exported so the remediation spec's primary gate ("/healthz
+# max < 250 ms at depth") has a data source. It cannot come from blackbox_exporter:
+# CacheLane binds loopback only (127.0.0.1:7332/7333) by design, and blackbox runs
+# on a different, pinned host, so it physically cannot reach these ports. It also
+# must not come from cachelane_request_duration_seconds, which is end-to-end and
+# therefore dominated by how long the model took to answer.
+#
+# This script already probes /healthz locally once a minute, so it is the natural
+# prober. Results go to node_exporter's textfile collector, which vmagent already
+# scrapes on this host.
+declare -A PROBE_DURATION PROBE_SUCCESS
+
 probe_local() {
-  local port="$1"
+  local port="$1" lane="${2:-}" start end rc
+  start="${EPOCHREALTIME/,/.}"
   curl -fsS --max-time "$PROBE_TIMEOUT" \
     "http://127.0.0.1:${port}/healthz" >/dev/null
+  rc=$?
+  end="${EPOCHREALTIME/,/.}"
+  if [[ -n "$lane" ]]; then
+    PROBE_DURATION["$lane"]="$(awk -v a="$start" -v b="$end" 'BEGIN{printf "%.6f", b-a}')"
+    PROBE_SUCCESS["$lane"]=$(( rc == 0 ? 1 : 0 ))
+  fi
+  return "$rc"
+}
+
+# Written atomically: node_exporter reads this directory on every scrape, and a
+# partially-written file is a parse error that drops the whole collector.
+emit_textfile_metrics() {
+  local dir="${CACHELANE_TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
+  local out="${dir}/cachelane_healthcheck.prom" tmp lane
+  [[ -d "$dir" && -w "$dir" ]] || return 0
+  tmp="$(mktemp "${out}.XXXXXX")" || return 0
+  {
+    echo "# HELP cachelane_healthz_probe_duration_seconds Duration of the local /healthz probe."
+    echo "# TYPE cachelane_healthz_probe_duration_seconds gauge"
+    for lane in "${!PROBE_DURATION[@]}"; do
+      echo "cachelane_healthz_probe_duration_seconds{lane=\"${lane}\"} ${PROBE_DURATION[$lane]}"
+    done
+    echo "# HELP cachelane_healthz_probe_success Whether the last local /healthz probe succeeded."
+    echo "# TYPE cachelane_healthz_probe_success gauge"
+    for lane in "${!PROBE_SUCCESS[@]}"; do
+      echo "cachelane_healthz_probe_success{lane=\"${lane}\"} ${PROBE_SUCCESS[$lane]}"
+    done
+    echo "# HELP cachelane_healthcheck_last_run_timestamp_seconds Unix time of the last healthcheck run."
+    echo "# TYPE cachelane_healthcheck_last_run_timestamp_seconds gauge"
+    echo "cachelane_healthcheck_last_run_timestamp_seconds $(date +%s)"
+  } >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$out"
 }
 
 # Deliberately socket-based, unlike the installer's drain check. This runs only
@@ -78,7 +124,12 @@ defer_for_active_connections() {
 
 check_one() {
   local name="$1" port="$2"
-  local failures
+  local failures lane
+  # cachelane-litellm.service -> litellm; matches the `lane` label carried by
+  # the vmagent scrape fragment and keyed on by every cachelane alert rule.
+  lane="${name#cachelane-}"
+  lane="${lane%.service}"
+  PROBE_SUCCESS["$lane"]=0
 
   if ! systemctl is-active --quiet "$name"; then
     log_warn "$name inactive; starting"
@@ -90,7 +141,7 @@ check_one() {
     return
   fi
 
-  if probe_local "$port"; then
+  if probe_local "$port" "$lane"; then
     reset_failure_count "$name"
     return
   fi
@@ -126,4 +177,7 @@ check_one() {
 
 check_one cachelane-litellm.service 7332
 check_one cachelane-claude.service 7333
+
+emit_textfile_metrics
+
 exit "$fail"
