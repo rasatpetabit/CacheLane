@@ -28,6 +28,12 @@ BACKUP=""
 DRAIN_TIMEOUT_SEC="${CACHELANE_DRAIN_TIMEOUT_SEC:-300}"
 READY_TIMEOUT_SEC="${CACHELANE_READY_TIMEOUT_SEC:-30}"
 
+# Validate the backup-keep override BEFORE any mutation, via the same helper that
+# prunes. It is the single fail-closed source of truth for the keep range (0..3);
+# a bad value aborts here, before the runtime snapshot is written, instead of
+# silently disabling pruning (the exact defect this script once had).
+bash "$REPO_ROOT/scripts/prune-runtime-backups.sh" --validate "${CACHELANE_BACKUP_KEEP:-2}"
+
 cleanup_stage() {
   if [[ -n "$STAGE" && -d "$STAGE" ]]; then
     rm -rf -- "$STAGE"
@@ -134,6 +140,13 @@ BACKUP="${INSTALL}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
 if sudo test -d "$INSTALL"; then
   echo "Backing up current runtime to $BACKUP"
   sudo cp -a --reflink=auto "$INSTALL" "$BACKUP"
+
+  # Prune prior runtime backups to a bounded keep-N, in line, in this same
+  # run. scripts/prune-runtime-backups.sh is the single fail-closed source of
+  # truth (validation + prune) and is unit-tested; see /srv/AGENTS.md "No backup
+  # trash in production roots". Runs AFTER the snapshot above so the
+  # just-written BACKUP counts toward keep-N.
+  bash "$REPO_ROOT/scripts/prune-runtime-backups.sh" "$INSTALL" "${CACHELANE_BACKUP_KEEP:-2}"
 fi
 
 echo "Installing staged runtime to $INSTALL"
