@@ -34,7 +34,7 @@ import {
   formatTopBlocks,
   jsonLine,
 } from "./format.js";
-import { getBannerText, printHelp } from "./banner.js";
+import { getBannerText, pkgVersion, printHelp } from "./banner.js";
 import { installCachelane, uninstallCachelane } from "./install.js";
 import { aiderTarget } from "./install-targets/aider.js";
 import {
@@ -248,7 +248,7 @@ export function createCachelaneCli(options: CliOptions = {}): Command {
   program
     .name("cachelane")
     .description("Cache-aware prompt orchestration for Claude Code")
-    .version("0.0.1")
+    .version(pkgVersion())
     .addHelpText("beforeAll", getBannerText())
     .configureOutput({
       writeOut: io.stdout,
