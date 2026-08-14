@@ -1,4 +1,8 @@
+<!-- docs-rebuild: exempt SHARD_CEILING — May 2026 REQ/AC table; split would break the ID namespace -->
 # 03 — Engineering Specifications
+
+**Kind:** history (May 2026 REQ/AC list). Several rows below are **not** how the code shipped.
+Prefer `src/` and [`../docs/README.md`](../docs/README.md) for current contracts.
 
 **Purpose:** All functional/non-functional requirements, API contracts, data models, acceptance criteria.  
 **Scope:** Phase 2 implementation requirements — what must be built and how it will be verified.  
@@ -16,15 +20,15 @@
 
 | ID | Requirement | Source |
 |----|-------------|--------|
-| REQ-F-001 | The system SHALL be distributed as an MCP server using `@modelcontextprotocol/sdk` (TypeScript) over **stdio transport** (no network ports). | §1.1, D8 |
+| REQ-F-001 | The system SHALL be distributed as an MCP server using `@modelcontextprotocol/sdk` (TypeScript) over **stdio transport**. **Shipped addition:** an HTTP proxy (`cachelane proxy`) is the hot path; this row's "no network ports" is superseded. | §1.1, D8 |
 | REQ-F-002 | The orchestrator SHALL read Anthropic API usage fields on every turn: `cache_creation_input_tokens`, `cache_read_input_tokens`, `ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens` via `@anthropic-ai/sdk`. | §1.1 |
 | REQ-F-003 | Block-size accounting SHALL use `@anthropic-ai/tokenizer` with a **model-string lookup** to select the correct tokenizer per request (supports both Opus 4.6 and 4.7). | §1.1, Q8 |
 | REQ-F-004 | Persistent storage SHALL be a single-file SQLite database via `better-sqlite3` in WAL mode. No external store. | §1.1, §1.2.2, D5 |
 | REQ-F-005 | In-memory cache-state tracking SHALL live in the orchestrator process using plain `Map`/`Set`; restart recovery relies on the on-disk SQLite log as the authoritative source. | §1.1 |
 | REQ-F-006 | Hashing for prefix fingerprinting and block deduplication SHALL use SHA-256 via `node:crypto`. | §1.1 |
 | REQ-F-007 | The CLI SHALL be implemented with `commander`. | §1.1 |
-| REQ-F-008 | Logging SHALL be structured JSON via `pino`, with `pino-pretty` in dev. Log lines SHALL include billable usage fields. | §1.1, §1.4 |
-| REQ-F-009 | Local logs SHALL be written to `~/.cachelane/logs/`, **rotated daily**, with **7-day retention**. | §1.4 |
+| REQ-F-008 | Logging SHALL be structured JSON via `pino`, with `pino-pretty` in dev. Log lines SHALL include billable usage fields. **Shipped:** custom `src/logger`, not pino (not in `package.json`). | §1.1, §1.4 |
+| REQ-F-009 | Local logs SHALL be written to `~/.cachelane/logs/`, **rotated daily**, with **7-day retention**. **Shipped:** `$CACHELANE_HOME/cachelane.log`, 10 MiB × 5 files. | §1.4 |
 | REQ-F-010 | The system SHALL expose a `cachelane stats` CLI command that reads directly from the SQLite log (no external metrics service). | §1.4 |
 
 ### REQ-F-011 through REQ-F-020 — Telemetry, Privacy & Security
@@ -35,7 +39,7 @@
 | REQ-F-012 | Telemetry MUST NOT be enabled by default; activation requires an explicit command. | §1.4, Q7, D9 |
 | REQ-F-013 | All processing SHALL occur locally. No request bodies, prompts, or completions may leave the user's machine except in the direct path to `api.anthropic.com`. | §1.5, D7 |
 | REQ-F-014 | The reference log SHALL store **block IDs, classifications, token counts, usage counters only** — NOT block contents. | §1.5 |
-| REQ-F-015 | Block contents SHALL live only transiently in the orchestrator process and SHALL NOT be persisted. | §1.5 |
+| REQ-F-015 | Block contents SHALL live only transiently in the orchestrator process and SHALL NOT be persisted. **Shipped exception:** `compression.retention.enabled` (default off) may store original tool outputs locally. | §1.5 |
 | REQ-F-016 | The Anthropic API key SHALL be read from the user's existing Claude Code config; Cachelane MUST NOT read, store, or forward it outside the originating API call. | §1.5 |
 | REQ-F-017 | The system SHALL respect Anthropic workspace-level cache isolation (effective since Feb 2026): Cachelane MUST use Claude Code's existing workspace ID and MUST NOT share prefixes across workspaces. | §1.5, Q6 |
 | REQ-F-018 | The reference log SHALL be keyed by workspace ID. | Q6 |
@@ -53,7 +57,7 @@
 | REQ-F-025 | The system MUST NOT use embeddings, vector stores, or any ML model dependency for reference detection. | §1.2.3, D6 |
 | REQ-F-026 | The K-pruner default value of K SHALL be **K=3**, with `--aggressive` mode (K=2) and `--conservative` mode (K=5). | Q3 |
 | REQ-F-027 | The classifier SHALL be fingerprint-based and **conservative**: a block defaults to `VOLATILE` unless it matches a stable signature (hash of file paths + last-modified mtimes for stable candidates). | Q2 |
-| REQ-F-028 | The reorderer MUST NOT reorder `tool_use`/`tool_result` pairs individually; it MAY only move whole pairs as a unit (invariant preserves byte-identical prefix). | Q9 |
+| REQ-F-028 | Breakpoint placement MUST NOT split `tool_use`/`tool_result` pairs. (May 2026 text said "reorderer"; shipped code does not reorder conversation blocks.) | Q9 |
 | REQ-F-029 | A second `cache_control` breakpoint at the middle-suffix boundary SHALL be placed **only if** the same turn-window has been seen byte-identical at least twice (dynamic placement). | Q4 |
 | REQ-F-030 | When Claude Code's `/compact` runs, Cachelane SHALL treat the new compacted history as a fresh middle region and reset all per-block counters for replaced blocks. | Q5 |
 
@@ -143,7 +147,7 @@
 - **Transport:** stdio (no network port)
 - **SDK:** `@modelcontextprotocol/sdk` ^1.x
 - **Host requirement:** Claude Code ≥ 0.6
-- **MCP tools exposed:** `cachelane:stats`, `cachelane:explain`, `cachelane:expand`
+- **MCP tools exposed (shipped names):** `cachelane_stats`, `cachelane_explain`, `cachelane_expand`, `cachelane_retrieve_tool_output`, `cachelane_health`. May 2026 text used `cachelane:stats` colon names.
 
 ### C-4: Telemetry Endpoint (opt-in, operated by project)
 

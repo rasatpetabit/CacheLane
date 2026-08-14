@@ -1,5 +1,8 @@
 # 01 — System Overview
 
+**Kind:** history (May 2026 product summary). Current behaviour: [`../README.md`](../README.md),
+[`../docs/README.md`](../docs/README.md). This file still owns the glossary and the v1 goal list.
+
 **Purpose:** High-level product summary, goals, non-goals, and full glossary.  
 **Scope:** Product-level understanding; no implementation details.  
 **Sources:** All five source documents.
@@ -9,12 +12,14 @@
 ## What Cachelane Is
 
 Cachelane is a **local MCP server + Claude Code hooks** (PreRequest/PostResponse) that intercepts
-every conversation turn between Claude Code and `api.anthropic.com`. It does two things:
+every conversation turn between Claude Code and `api.anthropic.com`. The shipped hot path is also
+an HTTP proxy (`cachelane proxy`). It does two things:
 
-1. **Cache-aware prompt orchestration** — classifies each content block by volatility and reorders
-   the prompt into three regions (stable prefix, semi-stable middle, volatile suffix), placing two
+1. **Cache-aware prompt orchestration** — classifies each content block by volatility and **marks**
+   three regions (stable prefix, semi-stable middle, volatile suffix) with two
    `cache_control` breakpoints so Anthropic's prompt cache fires at **0.1×** the normal input cost
-   on cache hits instead of paying **1.0×** every turn.
+   on cache hits instead of paying **1.0×** every turn. The shipped code does **not** reorder the
+   conversation; `system`/`tools` already precede `messages`, and new turns append.
 
 2. **K-pruning** — after each turn, any tool-call result block that has been idle for ≥ K
    consecutive turns is replaced with a compact stub that preserves its identifier and is
@@ -34,7 +39,7 @@ has shaped its portion of context.
 | # | Goal |
 |---|------|
 | G1 | Reduce input-token costs on every subsequent turn via K-pruning |
-| G2 | Maximize Anthropic prompt-cache hit rate by reordering blocks into stable/semi/volatile regions with two `cache_control` breakpoints |
+| G2 | Maximize Anthropic prompt-cache hit rate by classifying blocks into stable/semi/volatile regions with two `cache_control` breakpoints |
 | G3 | Refresh prompt-cache TTL via a keepalive worker so users don't pay full re-write penalties after idle periods |
 | G4 | Fail open: never make Claude Code slower or less reliable than without Cachelane |
 | G5 | Provide local-only operation — zero-cost regime, per-user, no shared backend |
@@ -98,7 +103,7 @@ on cache reads — a missed ~10× discount on the largest cost surface.
 | **Turn** | One user message plus the assistant's full reply (tool calls inside the reply do not split the turn). |
 | **Tool call** | An assistant-initiated function invocation. Multiple tool calls per turn are allowed; they do not advance the turn counter. |
 | **Content block** | A single tool-call result; the atomic unit that K-pruning operates on. |
-| **Block** | The smallest unit Cachelane reorders. One block = one logical content unit: a system prompt, a tool schema, one prior turn, one file read, one tool output, or a user message. Never split or merged. |
+| **Block** | The smallest unit Cachelane classifies. One block = one logical content unit: a system prompt, a tool schema, one prior turn, one file read, one tool output, or a user message. Never split or merged. |
 | **Volatility class** | One of `STABLE`, `SEMI`, or `VOLATILE`. **This is the canonical vocabulary — no other naming.** |
 | `STABLE` | Block that changes rarely: system prompt, tool schemas, CLAUDE.md, pinned project rules. |
 | `SEMI` | Block that changes turn-to-turn but follows a predictable pattern: recent-turn window. |
@@ -112,7 +117,7 @@ on cache reads — a missed ~10× discount on the largest cost surface.
 | **Idle N** | A content block whose `unused_turns` counter is N (i.e., has not been referenced for N consecutive turns). |
 | **K** | Configurable pruning threshold (turns). Defaults: 3 (default), 2 (aggressive), 5 (conservative). |
 | **Pinned block** | Any block in the stable prefix (CLAUDE.md, tool schemas, system prompt, explicitly pinned files). Exempt from K-pruning — never ticks. |
-| **Refetch / `cachelane:expand`** | The mechanism by which the model restores a stubbed block. The orchestrator re-issues the original tool call; restored content enters the suffix. |
+| **Refetch / `cachelane_expand`** | The mechanism by which the model restores a stubbed block. The tool returns trusted refetch metadata and marks the stub restored; it does not re-issue the original tool. |
 | **Keepalive ping** | A synthetic minimal API call (`max_tokens=1`, one-token user message, same prefix) that resets the cache TTL. Fires only when idle and cache is approaching expiry. |
 | **Idle-only triggering** | Keepalive heuristic: never fire a ping when a real turn recently touched the cache. |
 | **Hybrid keepalive policy** | Default v1 policy: adaptive 4-minute idle trigger for short prefixes; auto-switch to 1-hour TTL when prefix > 50k tokens. |

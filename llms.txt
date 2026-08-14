@@ -1,26 +1,26 @@
 # CacheLane — local cache-discipline layer for Claude Code
 
-> A local MCP server and Claude Code hooks that reorganize prompts so Anthropic's cache fires more often, delivering 30%-60% lower input-token cost on long sessions.
-
-CacheLane is a local MCP server plus Claude Code hooks (PreRequest/PostResponse) that sits between Claude Code and api.anthropic.com to cut input-token cost on every turn, targeting 30%-60% lower input-token cost on long sessions with no change to how the user drives Claude Code.
+> A local HTTP proxy, MCP server, and Claude Code hooks that mark prompt-cache
+> breakpoints and prune idle tool output. On this host it also fronts LiteLLM.
 
 ## Knowledge index — start here
 
-- [.okf/index.md](.okf/index.md): in-repo knowledge catalog: what this repo is, structure, conventions, pointers.
+- [.okf/index.md](.okf/index.md): in-repo knowledge catalog.
+- [docs/README.md](docs/README.md): operator and history routing table.
 
 ## Repo entry points
 
-- [README.md](README.md): project overview, install, usage.
+- [README.md](README.md): npm-user overview, install, usage (does not reorder).
 - [AGENTS.md](AGENTS.md): agent operating conventions for this repo.
-- [CLAUDE.md](CLAUDE.md): Claude/agent guidance and project rules.
+- [CLAUDE.md](CLAUDE.md): Claude shim; imports AGENTS.md.
 
 ## Documentation
 
-- [benchmarks](docs/benchmarks)
-- [superpowers](docs/superpowers)
+- [docs/README.md](docs/README.md) — pick an operator or history child
+- [designs/README.md](designs/README.md) — May 2026 spec (history)
 
 ## Workspace catalog
 
-- [ai/cachelane catalog](../../okf-workspace/repos/ai/cachelane.md): curated description in the fleet /srv/dev workspace index.
-- [Workspace index](../../okf-workspace/index.md): master catalog of all repos under /srv/dev, grouped by area.
+- [ai/cachelane catalog](../../okf-workspace/repos/ai/cachelane.md): fleet catalog (may still say Node ≥ 20; engines are ≥ 22).
+- [Workspace index](../../okf-workspace/index.md): master catalog of repos under /srv/dev.
 - [Back to workspace root](../../llms.txt)

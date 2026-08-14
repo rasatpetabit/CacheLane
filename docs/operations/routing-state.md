@@ -1,21 +1,24 @@
-# CacheLane routing state
+# CacheLane routing history (hang, bypass, restore)
 
-**What this document is for.** Nothing else on this host records whether CacheLane is in the
-traffic path. Before this file existed, the only evidence that both lanes had been deliberately
-bypassed was three `.bak-pre-cachelane-bypass-*` files in `$HOME` — which reads as debris, not as
-a decision. If you are trying to work out why the proxies are running but the stats are empty,
-this is the answer.
+**Kind:** decision/history. The 2026-07-31 hang, the dual-lane bypass, the 2026-08-06
+restore, and the alerting last mile.
 
-Last verified: **2026-08-06**.
+**Current flags and wiring:** [lane-state.md](lane-state.md).
+**Install:** [production-install.md](production-install.md).
+
+Last narrative update in this file: **2026-08-06**. The lede table below is the
+restore-day snapshot and is **not** the live latch set — Claude mutation was
+turned on the same day (see “MUTATION ENABLED” below). Re-read `config.json`
+before acting.
 
 ---
 
-## Current state: BOTH lanes restored (2026-08-06)
+## Restore-day snapshot (2026-08-06) — both lanes back in the path
 
-| lane | unit | port | upstream | in traffic path? |
+| lane | unit | port | upstream | in traffic path that day |
 |---|---|---|---|---|
-| Claude | `cachelane-claude.service` | 127.0.0.1:7333 | `api.anthropic.com` (TLS) | **yes — restored 22:40, features-off passthrough** |
-| LiteLLM | `cachelane-litellm.service` | 127.0.0.1:7332 | `127.0.0.1:4000` (plain HTTP) | **yes — features-off passthrough, soaking** |
+| Claude | `cachelane-claude.service` | 127.0.0.1:7333 | `api.anthropic.com` (TLS) | yes — restored 22:40; **later that day mutation ON** (not features-off) |
+| LiteLLM | `cachelane-litellm.service` | 127.0.0.1:7332 | `127.0.0.1:4000` (plain HTTP) | yes — features-off passthrough, soaking |
 
 ### Claude lane — restored by the operator, 2026-08-06 22:40
 
@@ -206,16 +209,16 @@ Config homes: `~/.cachelane-claude` and `~/.cachelane-litellm`. Note the symlink
 
 ### Two hardening changes made 2026-08-06
 
-1. **`elision_mode: "stateless"` added to both homes.** Neither config had the key, so both
-   defaulted to `"legacy"` (`src/config/defaults.ts:42`, pinned by `config.test.ts:42`). A future
-   flag flip would therefore have re-enabled the **legacy** database-backed pruner — the one whose
-   path still calls `countTokens` per block (`src/pruner/k-pruning.ts:58`) — rather than the
-   audited stateless transform. This is a no-op today (mutation is off, so the arm stands down
-   either way); it exists so that turning the feature back on selects the right implementation.
+1. **`elision_mode: "stateless"` added to both homes** (before the later mutation flip).
+   Neither config had the key, so both defaulted to `"legacy"` (`src/config/defaults.ts:42`).
+   A future flag flip would otherwise have re-enabled the **legacy** database-backed pruner
+   (`countTokens` per block in `src/pruner/k-pruning.ts`). At *this* moment in the day,
+   mutation was still off, so the arm stood down either way.
 
-2. **`pruner.enabled` set to `false` on the Claude home.** It had been `true`, leaving `k_pruner`
-   as the *single* latch between that lane and the legacy pruner, where the LiteLLM home already
-   had two. Both lanes now carry all three latches off.
+2. **`pruner.enabled` set to `false` on the Claude home** at the same hardening pass.
+   It had been `true`, leaving `k_pruner` as the single latch. **This was then reversed**
+   when mutation was enabled later the same day — see “MUTATION ENABLED” above and
+   [lane-state.md](lane-state.md) for the live latch set. Do not read this paragraph as current.
 
 Backups: `config.json.bak-pre-elision-mode-20260806T034542Z` in each home.
 
@@ -247,13 +250,13 @@ order: it carries the dispatch/subagent volume where CacheLane could actually pa
 a proxy fault there is contained to background jobs rather than taking down an interactive
 session.
 
-## Blocker: the recurrence alarm is not armed
+## Blocker (as of the first 2026-08-06 pass): the recurrence alarm was not armed
+
+The next section records that this was later installed. Do not stop here.
 
 `deploy/observability/` contains a vmagent scrape fragment and a set of vmalert rules — including
-`CacheLaneEventLoopBlocked`, the direct signature of the July 31 failure. **None of it is
-installed.** `/etc/vmagent/scrape.d/cachelane.yml` is absent, no cachelane rules exist under
-`/etc/vmalert/rules/`, and the files were never landed in the Ansible source of truth at
-`/srv/dev/petabit/sysadmin/observability/`.
+`CacheLaneEventLoopBlocked`, the direct signature of the July 31 failure. **On first writing,**
+none of it was installed.
 
 Both target directories are Ansible-managed, so a file copied straight into `/etc` works until
 the next playbook run and then disappears — alerts stop existing with nobody told. Land them via

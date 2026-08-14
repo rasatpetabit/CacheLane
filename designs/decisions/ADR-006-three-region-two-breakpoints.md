@@ -11,7 +11,7 @@ The design question is how many regions and breakpoints to use.
 
 ## Decision
 
-Reorder into three regions with two `cache_control` breakpoints:
+Classify into three regions and place two `cache_control` breakpoints (May 2026 text said "reorder"; shipped code marks in place):
 
 1. **Prefix (`STABLE`)** — system prompt, tool schemas, CLAUDE.md, pinned project rules
    → cached at 0.1× on every re-read

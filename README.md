@@ -6,7 +6,7 @@
 
 > **A local cache-discipline layer for Claude Code.**
 >
-> CacheLane sits between Claude Code and `api.anthropic.com` and reorganizes each turn's prompt so Anthropic's prompt cache fires far more often, then prunes stale tool output. The result is **30% to 60% lower input-token cost** on long sessions, with **zero change to how you use Claude Code**.
+> CacheLane sits between Claude Code and `api.anthropic.com` and marks cache breakpoints on the unchanging prefix, then prunes stale tool output. The **target** on long Anthropic sessions is **30% to 60%** lower input-token cost — a design goal, not a live measurement on this host — with **zero change to how you use Claude Code**.
 >
 > 🌐 **Website:** [cache-lane.vercel.app](https://cache-lane.vercel.app/)
 
@@ -42,153 +42,14 @@ Run `cachelane stats` **from your project directory**. It scopes to that project
 
 ---
 
-## Why it saves money (the intuition)
+## Why it saves money
 
-> **In one breath:** the Claude API is stateless, so Claude Code re-sends your whole conversation on every turn and you pay for it again and again. CacheLane marks the unchanging part with cache breakpoints so it stays identical and rides Anthropic's prompt cache at **one-tenth** the price, then trims stale tool output. The longer the session, the more you save.
+The Claude API is stateless, so Claude Code re-sends the whole conversation
+every turn. CacheLane **marks** (does not reorder) the unchanging prefix with
+`cache_control` breakpoints so Anthropic can serve it at 0.1×, then stubs idle
+tool output. Full intuition, pricing table, K-pruning, and keepalive:
 
-### 1. The problem: the API is stateless
-
-Claude does not keep your conversation on Anthropic's servers between requests. The Messages API is **stateless**, which means the client (Claude Code) has to send the **entire** conversation again on every turn:
-
-```
-Turn 1 sends:  [ system + tools ][ file ][ msg 1 ]
-Turn 2 sends:  [ system + tools ][ file ][ msg 1 ][ reply ][ msg 2 ]
-Turn 3 sends:  [ system + tools ][ file ][ msg 1 ][ reply ][ msg 2 ][ reply ][ msg 3 ]
-                |............ the same stuff, re-sent every turn ............|
-```
-
-Normally you pay full price for all of it on every turn. That repetition is the waste CacheLane removes.
-
-> **Source:** Anthropic, [Using the Messages API](https://docs.anthropic.com/en/api/messages-examples): *"The Messages API is stateless, which means that you always send the full conversational history to the API."* New turns are added by **appending** to the `messages` array, so conversation cost grows with length.
->
-> **"But Claude has a memory feature."** That is a different mechanism and it does not change the above. Memory tools and memory files work by saving notes to a file and then reading that file back **into the prompt** on later turns. The content still travels inside every request; the model is not recalling it from a saved server-side session.
-
-### 2. The discount it chases
-
-Anthropic's prompt cache bills a *repeated prefix* at a fraction of the normal input price. The exact multipliers, straight from Anthropic's documentation:
-
-| Token type | Price vs. base input |
-|---|---|
-| Normal input (uncached) | **1×** |
-| Cache **write** (5-minute TTL) | **1.25×** |
-| Cache **write** (1-hour TTL) | **2×** |
-| Cache **read** (hit) | **0.1×** |
-
-> **Source:** Anthropic, [Prompt caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching): *"5-minute cache write tokens are 1.25 times the base input tokens price; 1-hour cache write tokens are 2 times the base input tokens price; cache read tokens are 0.1 times the base input tokens price."* See also Anthropic [Pricing](https://docs.anthropic.com/en/docs/about-claude/pricing).
-
-The catch is in **how** the cache matches. Anthropic caches the **prefix** of a request up to a `cache_control` breakpoint, and a request reuses *"the longest prefix that a prior request already wrote to the cache."* The match stops at the first token that differs; everything after that point is billed at full price.
-
-New turns append to the **end** of the conversation, so the front is naturally stable. The thing that actually breaks caching is **volatile content sitting ahead of stable content**: a freshly injected tool result, a changing system reminder, or a block whose order or formatting shifts between turns. If any of that lands before your expensive stable content (system prompt, tool schemas, large files), the prefix diverges early and the stable content after it can no longer be served from cache.
-
-> **Source:** Anthropic, [Prompt caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching): *"Cache writes happen only at your breakpoint. Marking a block with `cache_control` writes exactly one cache entry: a hash of the prefix ending at that block."* The system *"automatically find[s] the longest prefix that a prior request already wrote to the cache."*
->
-> **What about Anthropic's _automatic caching_?** Anthropic can place one breakpoint for you — on the *last cacheable block*, advanced as the conversation grows, with a 20-block lookback ([Prompt caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)). But it still only *places a breakpoint*: it never reorders your prompt and never prunes idle content. CacheLane's breakpoint placement is on par with using native caching well — its **additional** savings come from K-pruning and keepalive (below), which the API has no equivalent for.
-
-### 3. The trick: mark the cache boundaries (without moving anything)
-
-CacheLane classifies each request into three **volatility regions** and places two `cache_control` breakpoints at the boundaries. It does **not** reorder your conversation: the API already sends `system` and `tools` before `messages`, and new turns append to the end, so the stable material is naturally at the front. CacheLane only marks *where* the cache boundaries sit (and strips/replaces any breakpoints Claude Code already set):
-
-```
-+----------------------------------------+
-| STABLE    system prompt, tool schemas, |  identical every turn
-|           CLAUDE.md, pinned rules      |  -> billed at 0.1x
-| ============ cache breakpoint ======== |
-| SEMI      recent turns + files read    |
-| ============ cache breakpoint ======== |
-| VOLATILE  your newest message + latest |  the only genuinely new part
-|           tool output                  |  -> full price, but small
-+----------------------------------------+
-```
-
-The expensive stable block sits at the front of every request by API structure and stays byte-identical, so the breakpoint lets Anthropic serve it from cache cheaply. The volatile material is already at the back — where its churn can't invalidate anything above it — so CacheLane never has to move it. Only the small new piece at the bottom pays full price.
-
-### 4. Worked example: "read a file"
-
-Say the unchanging stuff (system + tools + the file) is **15,000 tokens**, and each new message is **500 tokens**.
-
-| Turn | What happens | Cost (token-units) |
-|------|--------------|--------------------|
-| 1 (read file X) | Nothing cached yet; the stable block is *written* to cache at 1.25× | `15,000×1.25 + 500` ≈ **19,250** |
-| 2 (explain `foo`) | Stable block is now a cache hit at 0.1× | `15,000×0.1 + 500` ≈ **2,000** |
-| 3, 4, 5 … | Same cheap path every turn | ≈ **2,000** each |
-
-Per-turn cost collapses after the first turn:
-
-```
-cost/turn
- 19k | #                              turn 1: pay once to seed the cache
-     |
- 10k |
-     |
-  2k |   #  #  #  #  #  #  #  #  #     every turn after: flat and cheap
-     +-------------------------------
-       1  2  3  4  5  6  7  8  9 ...
-```
-
-> **"Read that file again"?** It's already in the cached front, so it costs 0.1×, basically free. You never re-pay full price for it.
-
-### 5. Why the savings grow with session length (the math)
-
-Let `S` = the size of the **repeated** part of your prompt (system + tools + files already read), the part CacheLane keeps stable. Over `N` turns, what do you pay for that part?
-
-```
-Without caching:   N x S            (full 1x price, every turn)
-
-With CacheLane:    1.25 * S         (write it once, on turn 1)
-                 + (N - 1) * 0.1*S  (cheap 0.1x read, every turn after)
-```
-
-Divide the CacheLane cost by `N` to get the **average per-turn cost** (per unit of `S`):
-
-```
-  1.25*S + (N - 1)*0.1*S                  1.15
-  ----------------------- =  ( 0.1  +  -------- ) * S
-            N                              N
-```
-
-That single formula is the whole story (the multipliers `1.25` and `0.1` are the cited Anthropic rates above):
-
-| Turns `N` | avg per-turn cost | savings vs. full price |
-|-----------|-------------------|------------------------|
-| 1 | 1.25× | (just the write) |
-| 2 | 0.675× | ~32% |
-| 10 | 0.215× | ~78% |
-| 50 | 0.123× | ~88% |
-| large N | **0.1×** | **90% (the ceiling)** |
-
-As the session grows, the one-time `1.15/N` write cost shrinks toward zero and the average slides down to **0.1×**, i.e. a **90% discount** on the repeated part. That 90% is not a marketing number. It is exactly the cache-read multiplier (`0.1×`) from the table above, and it is the theoretical ceiling. Real sessions also carry a small always-full-price "new" part each turn plus the occasional cache miss, which pulls the *measured* number down to roughly **80%**, which is what `cachelane stats` reports in practice. Short chats sit low on this curve; long coding sessions ride near the top.
-
-### 6. Keeping it lean: K-pruning and stubs
-
-Caching makes the prompt *cheap*, but a long session still makes it *big*. Old tool outputs and file dumps pile up after they stop being relevant. So CacheLane tracks how many turns each block goes untouched, and once a block has been idle for **K turns** (default `K = 3`) it swaps the full content for a tiny **stub**:
-
-```
-Claude Code sends:   [ ...history... ][ 5,000-token file ][ new msg ]
-                                        |  idle for K turns
-                                        v  CacheLane substitutes (forwarded copy only)
-Anthropic receives:  [ ...history... ][ stub: id + summary + expand() ][ new msg ]
-```
-
-K-pruning is **lossless and metadata-only**. Claude Code still holds the original and re-sends it every turn; CacheLane just masks it in the copy forwarded to Anthropic. If the model needs it back, it calls the `cachelane_expand` MCP tool, CacheLane flips that block from "stub" to "live", and the real content flows through again on the next turn. (Expanding is far cheaper than re-reading the file from scratch: the call carries just a block id, and it re-uses the existing cache entry instead of paying a fresh `1×` read **plus** a `1.25×` cache write for newly-read content.)
-
-### 7. Why there's a database
-
-Placing breakpoints on one request needs no memory, but pruning and restoring are stateful across turns. So CacheLane keeps a local SQLite database (`~/.cachelane/cachelane.db`) holding metadata:
-
-- **Idle counters:** "this block has been untouched for 3 turns" is impossible to know without history.
-- **Stub state and refetch handles:** which blocks are currently masked, and how `cachelane_expand` puts them back.
-- **Prefix hashes:** to confirm the stable region really stayed byte-identical (so the cache will hit) and to detect drift.
-- **Keepalive state:** which sessions are idle and how big their prefix is.
-- **Stats:** token counts, hit ratios, and savings that power `cachelane stats`, `sessions`, and `explain`.
-- **Optional retained originals:** only when `compression.retention.enabled` is explicitly enabled, CacheLane may store original tool outputs locally so Claude can retrieve them through `cachelane_retrieve_tool_output`.
-
-By default CacheLane does not store prompts, code, or tool-output bodies. Enabling compression retention changes that privacy posture for tool outputs only; retained originals are scoped to the local workspace/session and expire according to `compression.retention.ttl_days`.
-
-### 8. Keeping the cache warm (keepalive)
-
-Anthropic's cache lives about 5 minutes by default; a 1-hour tier is available at 2× write cost ([Prompt caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)). If you step away mid-session, the cache would expire and your next turn would pay full price to re-seed it. So a keepalive worker sends a minimal synthetic ping (`max_tokens=1`) during idle gaps to keep the prefix hot, and CacheLane promotes large prefixes (≥ 50k tokens) to that 1-hour tier automatically.
-
----
+→ [`docs/why-it-saves-money.md`](docs/why-it-saves-money.md)
 
 ## How it works
 
@@ -199,7 +60,7 @@ Anthropic's cache lives about 5 minutes by default; a 1-hour tier is available a
 
 The `cachelane mcp` process does **two jobs in one process**:
 
-- Exposes MCP tools to Claude (`cachelane_stats`, `cachelane_explain`, `cachelane_expand`, `cachelane_health`).
+- Exposes MCP tools to Claude (`cachelane_stats`, `cachelane_explain`, `cachelane_expand`, `cachelane_retrieve_tool_output`, `cachelane_health`).
 - Because `auto_proxy` is on by default, it **also starts the HTTP proxy** on `127.0.0.1:7332` in the same process.
 
 So a single auto-launched process owns everything. That's why you never start anything by hand, and why running `cachelane proxy` separately would fight it for the port.
@@ -211,7 +72,7 @@ For each turn the proxy:
 3. Forwards the optimized request to `api.anthropic.com` and streams the response straight back.
 4. Logs metadata (hashes, token counts, hit ratios) to local SQLite.
 
-On **any** error it forwards the original, unmodified request, so CacheLane never blocks or breaks your session ([Fail-open guarantees](#fail-open-guarantees)). The three mechanisms behind the savings (cache-aware orchestration, K-pruning, and keepalive) are explained in [Why it saves money](#why-it-saves-money-the-intuition) above.
+If the **pre-forward pipeline** throws (classify / prune / mutate), the proxy forwards the original request ([Fail-open guarantees](#fail-open-guarantees)). Startup, upstream, and mid-stream failures cannot transparently fail open. The three mechanisms are explained in [Why it saves money](docs/why-it-saves-money.md).
 
 ---
 
@@ -271,20 +132,16 @@ Turn 42 — Top blocks by token weight
 Each block shows:
 
 - **Region**: which volatility bucket (STABLE / SEMI / VOLATILE) the block landed in.
-- **Tier**: the actual billing tier from the API response — `cache_read` (0.1×), `cache_creation_5m` (1.25×), `cache_creation_1h` (2×), or `input` (1×).
+- **Tier**: the reconciler's **assigned** tier for that block (`cache_read` / `cache_creation_5m` / `cache_creation_1h` / `input`) — not a per-block field from the API.
 - **Est. Cost**: token count × tier multiplier, in cost units.
 
-The region totals at the bottom reconcile exactly to the authoritative `usage` object from the Anthropic API response — these are real billing numbers, not estimates.
+The **session totals** come from the API `usage` object. The **per-region / per-block split** is an estimate from the reconciler — do not treat a block's “Tier” column as a provider invoice line.
 
 **How it works under the hood:**
 
 1. On each turn, the proxy tokenizes every block using Anthropic's tokenizer (with an in-memory cache keyed by `content_hash` so identical blocks are never re-tokenized).
-2. After the API response arrives with the `usage` object, a **reconciler** determines each region's billing tier by comparing the current turn's breakpoint hashes against the previous turn's:
-   - If `prefix_breakpoint_hash` matches → STABLE hit `cache_read`.
-   - If `middle_breakpoint_hash` matches → SEMI hit `cache_read`.
-   - If a breakpoint changed → that region paid `cache_creation_5m` or `cache_creation_1h`.
-   - VOLATILE is always billed at `input` (1×).
-3. The reconciled `RegionCostBreakdown` is stored in `region_cost_json` on the `turn_explanations` table.
+2. After the API response arrives, a **reconciler** (`src/reconciler/index.ts`) **distributes the authoritative `usage` token counts** across regions. Matching breakpoint hashes are a *heuristic* for which region might have been a cache read — they do **not** prove a provider cache hit (TTL expiry or eviction can still produce `cache_creation` in `usage`). VOLATILE is assigned leftover `input` tokens.
+3. The reconciled `RegionCostBreakdown` is stored in `region_cost_json` on the `turn_explanations` table. Totals follow `usage`; per-region split is estimated.
 
 ---
 
@@ -356,7 +213,7 @@ Settings live in `~/.cachelane/config.json` and can be edited via the tuning com
 | Proxy | `127.0.0.1:7332`, upstream `api.anthropic.com:443` |
 | Auto-proxy | on (MCP server starts the proxy in-process) |
 | Telemetry | **off** (opt-in only) |
-| Compression | enabled, mode `lossless`, JSON/log compressors enabled |
+| Compression | enabled, mode `lossless`; JSON, log, **and shell** compressors on (`src/config/defaults.ts`) |
 | Compression retention | **off** (opt-in local storage of original tool outputs) |
 
 ---
@@ -389,7 +246,7 @@ Claude Code  ──►  CacheLane (:7332)  ──►  Other proxy (:8787)  ─�
 
 **Verify the chain is healthy:** after wiring two proxies together, run `cachelane doctor --probe` to confirm CacheLane's configured upstream is reachable and that cache reads are still firing. If `cache_reads` warns that reads dropped to ~0, the other layer may be stripping content CacheLane needs to cache — see the caveats above.
 
-> Running a chain like this means *not* using the zero-config auto-proxy — you start `cachelane proxy` yourself and manage the `ANTHROPIC_BASE_URL` wiring manually.
+> Prefer the MCP-launched proxy (leave `auto_proxy` on) and only change `ANTHROPIC_BASE_URL` / `proxy.upstream_*`. Start `cachelane proxy` yourself only when you are **not** using `cachelane mcp`; two listeners on `:7332` is `EADDRINUSE`.
 
 ---
 
@@ -418,7 +275,7 @@ All state is local:
 
 ## Fail-open guarantees
 
-A caching layer must never break your editor or disconnect you from your assistant. If CacheLane hits **any** problem (SQLite errors, config corruption, Node version mismatch, an uncaught exception in the request path), it logs to `~/.cachelane/cachelane.log` and **immediately forwards the unmodified request** to Anthropic. It will never block the model, slow Claude Code, or crash your session.
+If classify / prune / mutate throws **before** the upstream request is sent, the proxy logs to `$CACHELANE_HOME/cachelane.log` and forwards the **unmodified** body (`src/proxy/server.ts` fail-open catch). That does **not** cover: the process failing to start (Node mismatch, `EADDRINUSE`), the upstream being down, or an error after SSE bytes have already been emitted — those cannot replay transparently.
 
 CacheLane also enforces a **cache-stability gate**: the SHA-256 of the orchestrated prefix region must be byte-identical across repeated identical-input runs, preventing cache-busting drift from timestamps, random seeds, or unordered fields.
 
@@ -521,7 +378,17 @@ stateDiagram-v2
 
 [Apache-2.0](LICENSE)
 
+## This host (fleet install)
+
+`npm install -g` + `cachelane install` is the single-user Claude Code path
+(default `:7332`, `auto_proxy` on). This machine also runs dual systemd units
+from `/srv/cachelane`: Claude Code → `:7333` → Anthropic; Pi → `:7332` → LiteLLM.
+Do not collapse those surfaces. [`docs/README.md`](docs/README.md),
+[`docs/operations/production-install.md`](docs/operations/production-install.md),
+[`docs/operations/lane-state.md`](docs/operations/lane-state.md).
+`cachelane --version` prints `0.0.1` even when `package.json` is `1.1.7`.
+
 ## Knowledge
 
-Structured project knowledge is cataloged in the `.okf/` directory.
-See [`.okf/index.md`](.okf/index.md) for the repo's knowledge index.
+[`.okf/index.md`](.okf/index.md) catalogs structured knowledge.
+Operator + history routing: [`docs/README.md`](docs/README.md).

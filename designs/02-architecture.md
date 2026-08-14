@@ -1,5 +1,8 @@
 # 02 — Architecture
 
+**Kind:** history (May 2026 diagrams). The shipped third stage is breakpoint placement
+(`src/orchestrator/index.ts`), not a Reorderer that moves conversation blocks.
+
 **Purpose:** Component catalog, data flows, and all 7 engineering diagrams interpreted as text.  
 **Scope:** Structural/architectural — not algorithmic detail (see [`04-turns-and-pruning.md`](04-turns-and-pruning.md)).  
 **Source:** `Cachelane_Engineering_Diagrams_v2.html` (canonical visual reference — 7 diagrams).
@@ -13,7 +16,8 @@
 ## System Architecture (D1)
 
 **Lede:** Cachelane sits between Claude Code and the Anthropic API. The canonical pipeline is
-Classifier → Pruner → Reorderer. The Keepalive worker runs independently.
+Classifier → Pruner → breakpoint placement (`orchestrate`). May 2026 diagrams called the third
+stage “Reorderer”; the shipped code does not reorder. The Keepalive worker runs independently.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -52,14 +56,14 @@ Classifier → Pruner → Reorderer. The Keepalive worker runs independently.
 
 ### Pipeline Order
 
-**Canonical execution order: Classifier → Pruner → Reorderer**
+**Canonical execution order: Classifier → Pruner → breakpoint placement**
 
-This order is not arbitrary. The Pruner must run **before** the Reorderer because:
+This order is not arbitrary. The Pruner must run **before** breakpoints are placed because:
 - Pruning changes block token counts (stubs are smaller)
 - Pruning may change block volatility (a stubbed block is a different shape)
 - The Reorderer computes `cache_control` breakpoints from the **final** block set
 
-If Reorderer ran first, its breakpoints would be computed against the pre-prune block sizes and
+If breakpoints were placed first, they would be computed against the pre-prune block sizes and
 would be wrong after pruning.
 
 > The visual left-to-right layout in Diagram 1 v1 showed Classifier → Reorderer → Pruner — that
@@ -77,13 +81,14 @@ would be wrong after pruning.
 
 ## Block Model and Cache Boundaries (D2)
 
-**Lede:** Every content unit is one block. The Classifier tags each by volatility, the Reorderer
-pivots them into three regions, and two `cache_control` breakpoints mark where the cache prefix ends.
+**Lede:** Every content unit is one block. The Classifier tags each by volatility; two
+`cache_control` breakpoints mark the region boundaries. The May 2026 diagram showed a Reorderer
+pivoting blocks; shipped code marks in place.
 
 **Unsorted input → three-region output:**
 
 ```
-Unsorted input blocks          After reorder
+Unsorted input blocks          After classification + breakpoints
 ────────────────               ─────────────────────────────────────
 System prompt     STABLE  ─┐  ┌─ Prefix  ─────────────────────────┐
 Tool schemas      STABLE   ├──►│  System prompt   STABLE           │
@@ -137,7 +142,7 @@ See [`04-turns-and-pruning.md`](04-turns-and-pruning.md) for full algorithm spec
 ## Per-Turn API Flow (D4)
 
 **Lede:** Sequence across four participants on one assistant turn. Canonical pipeline order:
-classify → prune → reorder.
+classify → prune → place breakpoints.
 
 ```
 Claude Code      Cachelane          SQLite log       Anthropic API
@@ -149,7 +154,7 @@ Claude Code      Cachelane          SQLite log       Anthropic API
      │                 │                 │                 │
      │                 ├─[classify]──────────────────      │
      │                 ├─[prune]─────────────────────      │
-     │                 ├─[reorder]───────────────────      │
+     │                 ├─[place breakpoints]─────────      │
      │                 │                 │                 │
      │                 │──POST messages + 2 breakpoints────►
      │                 │                 │  ┌─────────────┤
@@ -233,8 +238,9 @@ Claude Code        Cachelane           SQLite log
 
 ## Refetch Flow (D7 — new in v2)
 
-**Lede:** When the model needs content that was stubbed, it calls `cachelane:expand`. The
-orchestrator re-issues the original tool call; restored content enters the suffix for the next turn.
+**Lede:** When the model needs content that was stubbed, it calls `cachelane_expand`.
+The tool returns trusted refetch metadata and `restoreStub`s the row. It does **not** re-issue
+the original tool (`src/pruner/tools.ts`).
 
 ```
 Claude (model)    Cachelane MCP    SQLite log
@@ -242,7 +248,7 @@ Claude (model)    Cachelane MCP    SQLite log
   (model sees a stub,   │               │
    needs original)      │               │
       │─tool_use:────── ►               │
-      │  cachelane:expand               │
+      │  cachelane_expand               │
       │  { block_id: "01J..." }         │
       │                 │──lookup───────►
       │                 │◄──refetch_handle = "view:auth.py:23-89"
@@ -272,7 +278,7 @@ Claude (model)    Cachelane MCP    SQLite log
 | **Cachelane Orchestrator** | Local MCP server (stdio) | Coordinates classify/prune/reorder per turn | Owns all sub-components; drives both stores |
 | **Classifier** | Sub-component | Tags each block `STABLE | SEMI | VOLATILE` using fingerprints; defaults to `VOLATILE` | Stateless per-turn |
 | **Pruner** | Sub-component | Checks `unused_turns ≥ K`; materialises stubs; updates reference log | Reads/writes reference log |
-| **Reorderer** | Sub-component | Sorts blocks into prefix/middle/suffix; places two `cache_control` breakpoints | Reads cache state tracker |
+| **Breakpoint placer** (diagrams: “Reorderer”) | Sub-component | Places two `cache_control` breakpoints at region boundaries; does not sort conversation blocks | Reads cache state tracker |
 | **Keepalive worker** | Async sub-component | Fires minimal pings to refresh TTL; writes cache state tracker | Timer state, expected_expiry_ms |
 | **Reference log** | Persistent store (SQLite) | Per-block: id, classification, token_count, unused_turns, is_stub, refetch_handle | `~/.cachelane/cachelane.db` |
 | **Cache state tracker** | Volatile store (in-memory) | Per-prefix: hash, ttl_class, cached_at_ms, expected_expiry_ms, last_read_at_ms | RAM only; resets on restart |
@@ -295,7 +301,7 @@ Claude (model)    Cachelane MCP    SQLite log
 | I7 | Cachelane → SQLite | INSERT/UPDATE | Updated per-block counters | Sync |
 | I8 | Keepalive → Anthropic | HTTPS POST | Minimal request (1-token, same prefix) | Async (timer) |
 | I9 | Keepalive → Cache tracker | In-process | Update `last_read_at_ms`, `expected_expiry_ms` | Async |
-| I10 | Model → Cachelane | `tool_use: cachelane:expand` | `{ block_id }` | Sync (via model turn) |
+| I10 | Model → Cachelane | `tool_use: cachelane_expand` | `{ block_id }` | Sync (via model turn) |
 | I11 | Cachelane → SQLite | SELECT | Lookup refetch_handle by block_id | Sync |
 | I12 | Cachelane → (original tool) | Re-issue tool call | Original tool + args | Sync |
 

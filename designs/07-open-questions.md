@@ -1,5 +1,8 @@
 # 07 — Open Questions
 
+**Kind:** history (May 2026 Q-table). Statuses were not refreshed this rebuild.
+"Reorderer" / `cachelane:expand` wording below is the original text.
+
 **Purpose:** All unresolved questions, their owners, targets, and current resolution status.  
 **Scope:** Anything that was flagged as undecided in the source documents, plus gaps and
 contradictions identified during synthesis.  

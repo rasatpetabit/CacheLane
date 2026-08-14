@@ -1,3 +1,4 @@
+<!-- docs-rebuild: exempt SHARD_CEILING — sequential exact-match repair procedure; split would break the ordered safety contract -->
 # CacheLane hook stats historical repair runbook
 
 > **Status:** documented procedure only.  

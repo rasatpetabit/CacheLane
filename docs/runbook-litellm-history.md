@@ -1,0 +1,458 @@
+# History — CacheLane in front of LiteLLM (2026-07-16 → 2026-08-10)
+
+**Kind:** decision/history. Dated canaries, coverage tables, soak skip, and
+ops diary. **Not current state.**
+
+Current operator doc: [runbook-litellm.md](runbook-litellm.md).
+Live flags: [operations/lane-state.md](operations/lane-state.md).
+Install: [operations/production-install.md](operations/production-install.md).
+
+Claims in this file (mutation ON, upstream `192.168.109.71:4000`, nohup
+proxy, `systemctl --user`, `cachelane-anthropic.service`) describe a past
+moment. Re-check the live files before acting on any of them.
+
+Status as recorded 2026-07-17, epyc2:
+
+| Stage | State |
+|---|---|
+| Phase 1a smoke | **PASSED** (2026-07-16) |
+| Phase 2 OpenAI K-pruning | **COMMITTED** (`0b95a49`) + live-verified on :7332 |
+| Shadow mode | **PASSED** then graduated to live pruning |
+| Canaries (option 3, shadow) | **PASSED** 2026-07-17 — grok-4.5 / streaming / long context / multi-turn prune estimates |
+| Live pruning (`mutation_enabled=true`) | **ON + canary-verified** 2026-07-17 on smoke instance |
+| Live Pi `litellm.baseUrl` repoint | **DONE** 2026-07-17 — `http://127.0.0.1:7332/v1` |
+| Coverage audit | **DONE** — **14/14** enabledModels through CacheLane (GPT family + default grok) |
+| Default → litellm/grok-4.5 | **DONE** 2026-07-17 — new sessions hit CacheLane |
+| 7-day soak | **SKIPPED** (operator) — timer disabled |
+| Production install | **DONE** `/srv/cachelane` + dual user units |
+| Rollout status | **COMPLETE** 2026-07-17 (soak skipped by operator) |
+| Dual health | `scripts/health-dual.mjs` |
+
+## Topology
+
+```
+Pi litellm/* (default grok-4.5)  → CacheLane :7332 → LiteLLM → providers
+Dispatch / agent-dispatch gateway-client → CacheLane :7332 → LiteLLM  (via AGENT_DISPATCH_GATEWAY_URL)
+skynet MCP (when still spawned)  → CacheLane :7332/v1 → LiteLLM     (via SKYNET_BASE_URL)
+Claude Code                      → CacheLane :7333 → api.anthropic.com (NOT LiteLLM)
+openai-codex/*                   → direct Responses API (Pi GPT backup; bypasses both)
+```
+
+Shadow semantics: proxy still intercepts, classifies, ages tool blocks, and records
+would-have-pruned decisions (`mode:baseline`, `pruned:N`, `tokens_reclaimed`) but
+forwards the **original unmutated body** upstream.
+
+## Setup (isolated smoke home)
+
+```bash
+export CACHELANE_HOME=~/.cachelane-litellm
+# config.json deltas from defaults:
+#   proxy.upstream_host=192.168.109.71
+#   proxy.upstream_port=4000
+#   proxy.upstream_ssl=false
+#   features.auto_proxy=false
+#   features.mutation_enabled=true    # LIVE pruning (was false during shadow)
+#   features.k_pruner=true
+cd /srv/dev/ai/cachelane
+node dist/cli/index.cjs proxy
+```
+
+Config is re-read per request — flipping `mutation_enabled` does not require a restart.
+
+Build baseline: Node 22.22.1, `npm ci && npm run build && npm test` → 579 passed /
+2 skipped after Phase 2. `.nvmrc` and the build target now require Node 22;
+CI additionally covers Node 24 LTS.
+
+## Phase 1a smoke results (2026-07-16)
+
+| Check | Result |
+|---|---|
+| OpenAI path `POST /v1/chat/completions`, qwen36-27b | 200, content round-trips |
+| Anthropic path `POST /v1/messages`, qwen36-27b | 200, LiteLLM translates to Anthropic shape |
+| `cachelane stats` | records turns |
+| Byte-stability probe (3 identical requests) | `prefix_changed: false`, signals `prefix_cached, middle_cached` |
+
+## Phase 2 (code) — OpenAI K-pruning
+
+Committed as `0b95a49` on `headroom-litellm-integration`:
+
+- Ingest OpenAI `role:"tool"` messages as pruner blocks keyed by `tool_call_id`
+- `materializePrunedBlocksOpenAI` stubs content in place (pairing invariant)
+- Adapter-aware cost accounting + `tokens_reclaimed` stat
+- Live mutation verify (pre-shadow): idle 6K-token tool output stubbed at K=3 on qwen
+
+## Shadow + canaries (option 3, 2026-07-17)
+
+Script: `scripts/canary-shadow.mjs`
+
+```bash
+export CACHELANE_HOME=~/.cachelane-litellm
+# ensure mutation_enabled=false in $CACHELANE_HOME/config.json
+node scripts/canary-shadow.mjs
+# → /tmp/cachelane-canary-shadow.json
+```
+
+| Canary | Result |
+|---|---|
+| grok-4.5 short non-stream | 200 (~0.9s) |
+| streaming SSE (qwen36-27b) | 200, SSE + `[DONE]` |
+| streaming SSE (grok-4.5) | 200, SSE + `[DONE]` |
+| long context (~32k system chars, qwen) | 200 (~1.6s, ~4k prompt tokens) |
+| parallel tool_call ids (qwen) | 200 |
+| multi-turn shadow prune (qwen, K=3) | turns 4–5: `pruned:2` + `mode:baseline`, `request_mutated=0`, ~2922 tok reclaim estimate |
+| multi-turn shadow prune (grok-4.5, K=3) | turns 4–5: `pruned:2` + `mode:baseline`, `request_mutated=0`, ~2872 tok reclaim estimate |
+
+Invariant across all canary turns: `request_mutated=0` and signals contain `mode:baseline`.
+
+Sticky multi-turn sessions use header `x-claude-code-session-id`.
+
+### Known issues found during canaries
+
+1. **`blocks.id` is a global PRIMARY KEY** (not `(session_id, id)`). Two sessions that
+   reuse the same `tool_call_id` (e.g. both use `call_1`) collide; the second
+   insert is swallowed on UNIQUE and that session never ages/prunes those tools.
+   Canary script uses per-session unique tool ids. Schema fix is a follow-up
+   before broad multi-client traffic.
+2. **Post-response extract UPSERTs `is_stub=0`**, so a block marked stubbed on the
+   pre-request path is unmarked after the response is recorded if the client still
+   re-sends the full tool message. Shadow estimates still fire each eligible turn
+   (good for observation); live mode relies on body materialization rather than
+   durable `is_stub` alone. Worth tightening before soak.
+3. Anthropic-path tokenizer model-table is still Claude-centric (OpenAI/heuristic
+   path via `countCompressionTokens` is fine for chat-completions).
+
+### Troubleshooting (2026-08-10) — `status=226/NAMESPACE` crash-loop
+
+Symptom: `cachelane-litellm.service` in `activating (auto-restart)`,
+`Failed at step NAMESPACE ... No such file or directory`.
+
+Cause: the unit sets `ProtectSystem=strict` + `ReadWritePaths=/home/ras/.cachelane-litellm
+/home/ras/.cachelane-openai /home/ras/.cachelane-smoke`. systemd requires each
+ReadWritePaths entry to EXIST on disk to set up the mount namespace; if
+`~/.cachelane-smoke` (or a sibling) has been deleted, namespace setup fails and the
+service crash-loops forever.
+
+Fix (no config change needed):
+```sh
+mkdir -p /home/ras/.cachelane-smoke
+systemctl restart cachelane-litellm.service
+```
+`/home/ras/.cachelane-smoke` is CacheLane's default PI-home scratch dir
+(`CACHELANE_PI_HOME || ~/.cachelane-smoke`); it is fine empty. Verified 2026-08-10:
+after mkdir + restart, unit active > 1h with no restarts; `:7332` serves
+`deepseek-v4-flash` (200) plus the full GPT/LiteLLM catalog.
+
+## Live pruning canaries (2026-07-17)
+
+Config flip (no restart; per-request loadConfig):
+
+```bash
+# ~/.cachelane-litellm/config.json
+"features": { "mutation_enabled": true, "k_pruner": true, "auto_proxy": false, "keepalive": true }
+```
+
+Proof that the **upstream body is stubbed** (not just estimated): prompt tokens collapse at K=3.
+
+| Model | turns 1–3 prompt toks | turn 4 | turn 5 | signals @4+ |
+|---|---|---|---|---|
+| qwen36-27b | 3187 → 3221 | **308** | **321** | `pruned:2`, `request_mutated=1`, no `mode:baseline` |
+| grok-4.5 | 6339 → 6369 | **460** | **473** | `pruned:2`, `request_mutated=1`, no `mode:baseline` |
+
+Decision-time reclaim on first prune fire: ~2874 (qwen) / ~2876 (grok).
+Streaming (qwen) + short grok still 200 under live mode.
+Artifact: `/tmp/cachelane-canary-live.json`.
+
+Rollback to shadow: set `mutation_enabled=false` in `~/.cachelane-litellm/config.json` (hot).
+
+
+## Coverage audit (2026-07-17)
+
+`~/.pi/agent/settings.json` `enabledModels` vs CacheLane hop:
+
+| Path | Models | CacheLane? |
+|---|---|---|
+| `litellm/*` | opus-4.8, qwen36-27b, sonnet-5, fable-5, glm-5.2, gpt-5.6, gpt-5.6-sol | **yes** (baseUrl → :7332) |
+| `openai-codex/*` | gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna | no (Responses API; intentional) |
+| `xai-auth/*` | **default** `grok-4.5` | no |
+
+Coverage of *enabled* models: **9/11 (82%)** through CacheLane after default flip.
+
+### Default flip (2026-07-17)
+
+| Field | Before | After |
+|---|---|---|
+| `defaultProvider` | `xai-auth` | **`litellm`** |
+| `defaultModel` | `grok-4.5` | **`grok-4.5`** (same id, litellm provider) |
+| enabled | `xai-auth/grok-4.5` | **`litellm/grok-4.5`** |
+| `providers.litellm.models` | no grok | **`grok-4.5` added** (ctx 500k) |
+| path | direct xAI auth | **CacheLane :7332 → LiteLLM :4000** |
+
+Backups:
+- `~/.pi/agent/models.json.bak-pre-default-grok-litellm-*`
+- `~/.pi/agent/settings.json.bak-pre-default-grok-litellm-*`
+
+Verified: `POST :7332` model=grok-4.5 → 200, CacheLane turn `request_mutated=1`.
+
+Still bypass: `openai-codex/*` only (Responses API).
+
+**This session** may still be on old default until restart; **new** Pi sessions use litellm/grok-4.5.
+
+
+### GPT models on litellm → CacheLane (2026-07-17)
+
+All LiteLLM GPT catalog models are now under `providers.litellm` (baseUrl :7332)
+and **enabled** as `litellm/*`. `openai-codex/*` removed from `enabledModels`
+(provider entry kept for optional manual use; Responses API still bypasses CacheLane).
+
+| Model | enabled | smoke via :7332 |
+|---|---|---|
+| grok-4.5 (default) | litellm/grok-4.5 | 200 (prior) |
+| gpt-5.6 / sol / terra / luna | litellm/* | luna 200 |
+| gpt-5.5 / gpt-5.5-pro | litellm/* (added) | gpt-5.5 200 |
+| gpt-5.4-mini | litellm/* | 200 |
+| gpt-5.3-codex-spark | litellm/* | (catalog) |
+
+Backups: `models.json.bak-pre-gpt-cachelane-*`, `settings.json.bak-pre-gpt-cachelane-*`.
+Coverage of enabledModels: **14/14 (100%)** through CacheLane.
+
+
+### Full LiteLLM catalog on Pi via CacheLane (2026-07-17)
+
+- **All non-`dispatch-*` LiteLLM models** registered under `providers.litellm` and
+  enabled as `litellm/*` (26 models). Pi baseUrl stays `http://127.0.0.1:7332/v1`.
+- **Default:** `litellm/grok-4.5`.
+- **Backup recovery path (bypasses CacheLane + LiteLLM):** `openai-codex/gpt-5.6-{sol,terra,luna}`
+  remain in `enabledModels` for direct Responses API if the litellm/CacheLane path fails.
+- **Claude Code:** uses CacheLane with **Anthropic upstream** (NOT LiteLLM):
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:7333` → `cachelane-claude.service`
+  (`CACHELANE_HOME=~/.cachelane`, upstream `api.anthropic.com:443`). Model stays
+  `claude-fable-5[1m]`. API key is the normal Anthropic key (never `noauth`).
+- **Pi litellm path** remains separate: `:7332` → LiteLLM (`cachelane-litellm`).
+- **Soak:** skipped per operator decision; `cachelane-soak-snapshot.timer` disabled.
+
+Backups: `models.json.bak-pre-all-litellm-*`, `settings.json.bak-pre-all-litellm-*`,
+`~/.claude/settings.json.bak-pre-cachelane-*` (CC restore source).
+
+## 7-day soak (SKIPPED) (started 2026-07-17T04:41:23Z)
+
+| Item | Value |
+|---|---|
+| Start marker | `~/.cachelane-litellm/soak/START` |
+| Snapshots | `~/.cachelane-litellm/soak/snapshots.jsonl` |
+| Script | `scripts/soak-snapshot.mjs` |
+| Timer | `cachelane-soak-snapshot.timer` (every 6h, user unit) |
+| Day-0 baseline | 79 turns, 27 sessions, 13 prune-fire turns, ~39.5k tokens_reclaimed recorded |
+
+```bash
+CACHELANE_HOME=~/.cachelane-litellm node scripts/soak-snapshot.mjs --label manual
+systemctl --user list-timers | rg cachelane
+# rollback still: restore models.json.bak-pre-cachelane-20260717T043930Z
+```
+
+Watch for: error rate, prune_fire_turns growth, baseline_turns (should stay ~0 on new live traffic),
+`blocks.id` collisions across sessions, agent completion failures on long tool-heavy chats.
+
+
+## Restart safety (2026-07-29)
+
+The dual-proxy health timer must not treat concurrent Pi sessions as a dead process.
+
+| Control | Behavior |
+|---|---|
+| Local liveness | `GET /healthz` on `:7332` and `:7333` is process-local only. It does **not** call LiteLLM, Anthropic, SQLite, or the pruning pipeline. |
+| Failure threshold | `cachelane-healthcheck` requires **3 consecutive local probe misses** before a lane is eligible to restart. One slow probe never restarts anything. |
+| Active-connection drain | Before restart, the checker counts established server-side sockets with `ss -Htn state established "( sport = :<port> )"`, waits one second, and checks again. Any active client blocks the restart and retains the failure count. |
+| State | Failure counters live under `/run/cachelane-healthcheck/` and survive timer runs via `RuntimeDirectoryPreserve=yes`. A successful local probe clears the counter. |
+| Installer restarts | `scripts/install-runtime.sh` waits for two consecutive idle samples per lane (`CACHELANE_DRAIN_TIMEOUT_SEC`, default 300s). Drain timeout aborts instead of forcing a restart. |
+| Operator override | If a truly wedged proxy still has clients, stop the timer, drain or kill clients, then restart the unit manually. The timer will not do that for you. |
+
+Canonical healthcheck source: `scripts/cachelane-healthcheck.sh` (installed to `/usr/local/sbin/cachelane-healthcheck`).
+
+## Production install (2026-07-17)
+
+Runtime lives under **`/srv/cachelane`** (not `/srv/dev`). Units:
+
+| Unit | CACHELANE_HOME | Port | Upstream |
+|---|---|---|---|
+| `cachelane-litellm.service` | `~/.cachelane-litellm` | **7332** | LiteLLM `192.168.109.71:4000` (Pi) |
+| `cachelane-claude.service` | `~/.cachelane` | **7333** | `api.anthropic.com:443` (Claude Code) |
+
+```bash
+# stage, install dependencies, build, and run native-module smoke checks only
+cd /srv/dev/ai/cachelane
+CACHELANE_DEPLOY_DRY_RUN=1 scripts/install-runtime.sh
+
+# production deploy: creates a timestamped runtime backup and restarts one lane at a time
+scripts/install-runtime.sh
+node /srv/cachelane/scripts/health-dual.mjs
+```
+
+CLI note: `cachelane proxy` now reads `proxy.port` from config when `--port` is omitted
+(previously hard-defaulted to 7332 and broke dual-home deploys).
+
+## Next gates
+
+**All rollout gates closed** (2026-07-17). Remaining is routine ops only:
+
+- Reinstall/update runtime: `scripts/install-runtime.sh`
+- Health: `node /srv/cachelane/scripts/health-dual.mjs`
+- Client rollback drill (dry-run): `DRY_RUN=1 scripts/rollback-client-config.sh`
+- Client rollback apply: `DRY_RUN=0 scripts/rollback-client-config.sh`
+- Stop proxies: `systemctl stop cachelane-litellm cachelane-claude`
+- ~~Dispatch MCP path interception~~ — **done** (gateway-client + skynet via :7332).
+- Phase 4 packaging polish beyond `/srv/cachelane` — future, non-blocking.
+
+
+## Pi litellm baseUrl repoint (2026-07-17)
+
+| Field | Value |
+|---|---|
+| File | `~/.pi/agent/models.json` → `providers.litellm.baseUrl` |
+| Before | `http://192.168.109.71:4000/v1` |
+| After | `http://127.0.0.1:7332/v1` |
+| Backup | `~/.pi/agent/models.json.bak-pre-cachelane-20260717T043930Z` |
+| apiKey | unchanged (`noauth`) |
+| CacheLane upstream | still `192.168.109.71:4000` |
+
+Path now:
+
+```
+Pi (litellm/* models) → CacheLane 127.0.0.1:7332 → LiteLLM 192.168.109.71:4000 → provider
+```
+
+**Coverage note (not full fleet traffic):**
+- Routes **through** CacheLane: any model under `providers.litellm` (`litellm/qwen36-27b`,
+  `litellm/glm-5.2`, `litellm/gpt-5.6*`, `litellm/fable-5`, …).
+- Stays **outside** CacheLane: `defaultProvider=xai-auth` / `defaultModel=grok-4.5`,
+  and `openai-codex/*` (Responses API — no CacheLane adapter).
+- Existing Pi sessions keep the old baseUrl until restart; **new** sessions load the
+  repointed config.
+
+Verify (disposable):
+```bash
+# already ran: qwen36-27b + glm-5.2 via :7332 → 200, request_mutated=1
+CACHELANE_HOME=~/.cachelane-litellm node /srv/dev/ai/cachelane/dist/cli/index.cjs stats
+```
+
+**Rollback (one line):**
+```bash
+# restore backup, or:
+python3 -c "import json,pathlib;p=pathlib.Path.home()/'.pi/agent/models.json';d=json.loads(p.read_text());d['providers']['litellm']['baseUrl']='http://192.168.109.71:4000/v1';p.write_text(json.dumps(d,indent=2)+chr(10))"
+# then start a new Pi session
+```
+
+## Ops notes
+
+- Proxy currently: `CACHELANE_HOME=~/.cachelane-litellm node dist/cli/index.cjs proxy`
+  (nohup from Phase 2 verify; binds `127.0.0.1:7332` only).
+- Do **not** set `auto_proxy=true` or touch `~/.claude` / Pi baseUrl without an
+  explicit go-ahead.
+- Stats: `CACHELANE_HOME=~/.cachelane-litellm node dist/cli/index.cjs stats`
+- Explain latest: `CACHELANE_HOME=~/.cachelane-litellm node dist/cli/index.cjs explain`
+
+## Rollback drill (client config)
+
+Backups written during rollout (pick latest):
+
+- `~/.pi/agent/models.json.bak-pre-cachelane-*`
+- `~/.pi/agent/settings.json.bak-pre-*`
+- `~/.claude/settings.json.bak-pre-cachelane-*` / `bak-pre-cc-cachelane-*`
+
+```bash
+DRY_RUN=1 bash scripts/rollback-client-config.sh   # lists backups, no change
+DRY_RUN=0 bash scripts/rollback-client-config.sh   # restores client config
+# optional hard stop of proxies:
+systemctl --user stop cachelane-litellm.service cachelane-claude.service
+# Pi GPT backup path (openai-codex/*) never went through CacheLane — always available.
+```
+
+Dry-run verified 2026-07-17 (backups present).
+
+## How to view CacheLane statistics
+
+Two data homes (do not mix them):
+
+| Traffic | `CACHELANE_HOME` | Port | Upstream |
+|---|---|---|---|
+| Pi `litellm/*` | `~/.cachelane-litellm` | 7332 | LiteLLM |
+| Claude Code | `~/.cachelane` | 7333 | api.anthropic.com |
+
+### One-shot dual view
+```bash
+node /srv/cachelane/scripts/stats-dual.mjs
+```
+
+### Daily trend log
+```bash
+# timer: cachelane-stats-snapshot.timer → ~/.cachelane-ops/stats-snapshots.jsonl
+node /srv/cachelane/scripts/stats-snapshot.mjs
+tail -5 ~/.cachelane-ops/stats-snapshots.jsonl
+```
+
+### CLI (pick a home)
+```bash
+# Pi path (most traffic today)
+CACHELANE_HOME=~/.cachelane-litellm node /srv/cachelane/dist/cli/index.cjs stats --scope all
+CACHELANE_HOME=~/.cachelane-litellm node /srv/cachelane/dist/cli/index.cjs sessions
+CACHELANE_HOME=~/.cachelane-litellm node /srv/cachelane/dist/cli/index.cjs explain --top-blocks
+CACHELANE_HOME=~/.cachelane-litellm node /srv/cachelane/dist/cli/index.cjs doctor
+
+# Claude Code path
+CACHELANE_HOME=~/.cachelane-claude node /srv/cachelane/dist/cli/index.cjs stats --scope all
+```
+
+### HTML dashboard
+```bash
+CACHELANE_HOME=~/.cachelane-litellm node /srv/cachelane/dist/cli/index.cjs report --scope all --out ~/.cachelane-litellm/report.html
+# open ~/.cachelane-litellm/report.html in a browser
+# CC: ~/.cachelane/report.html
+```
+
+### Inside Claude Code (MCP)
+After restarting CC so it reloads MCP:
+- Server **`cachelane`** → CC/Anthropic DB (`~/.cachelane`)
+- Server **`cachelane-pi`** → LiteLLM DB (`~/.cachelane-litellm`)
+
+Tools: `cachelane_stats`, `cachelane_explain`, `cachelane_health`, `cachelane_expand`, `cachelane_retrieve_tool_output`.
+
+Ask CC: "use cachelane-pi cachelane_stats with scope all" for Pi savings.
+
+### What good looks like
+- **Savings ratio** rising on multi-turn sessions (Pi smoke already ~45% overall).
+- **Cache hit ratio** >0 on later turns of the same session.
+- **Tokens reclaimed by pruning** grows on long tool-heavy chats.
+- **Pipeline fallback turns**: counts turns with `request_mutated=0` (includes short
+  probes with nothing to prune — not always an error). Prefer session-level
+  `sessions` / HTML report for real multi-turn quality.
+- Health: `node /srv/cachelane/scripts/health-dual.mjs` both paths listen.
+
+### Live numbers (2026-07-17)
+- LiteLLM: **97 turns, 30.2% cache hit, 45.4% savings, 39.5k tokens reclaimed**
+- Claude Code: probe-only so far (need real multi-turn CC sessions for savings)
+
+## Dispatch MCP through CacheLane (2026-07-17)
+
+**Path:** agent-dispatch `gateway-client.mjs` and skynet-mcp HTTP both use CacheLane
+smoke on `:7332` instead of talking to LiteLLM directly.
+
+| Client | Env | Value |
+|---|---|---|
+| agent-dispatch gateway-client | `AGENT_DISPATCH_GATEWAY_URL` / `AGENT_DISPATCH_LITELLM_URL` | `http://127.0.0.1:7332` |
+| skynet-mcp | `SKYNET_BASE_URL` / `SKYNET_QWEN_BASE_URL` | `http://127.0.0.1:7332/v1` |
+
+Wired in:
+- `~/.config/environment.d/50-cachelane-dispatch.conf`
+- `~/.claude/settings.json` `env`
+- `~/.claude.json` MCP servers `skynet` + `agent-dispatch`
+- `~/.bashrc` exports (Pi terminal sessions)
+
+**Verified:** gateway-client health ok; chat `model_group=qwen36-27b` → PONG; turn
+recorded in `~/.cachelane-litellm/cachelane.db` with `request_mutated=1`;
+`skynet-mcp.py --health` reports `base_url: http://127.0.0.1:7332/v1`.
+
+**Rollback:** remove the env vars / restore `settings.json` + `.claude.json` from
+`bak-pre-dispatch-cachelane-*`, delete `environment.d/50-cachelane-dispatch.conf`,
+restart CC/Pi. Proxies can stay up.
+
+**Note:** New Pi/CC sessions must load the env (restart). This session may still
+use pre-change process env until restart.

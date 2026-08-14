@@ -1,6 +1,6 @@
 # ADR-005: Deploy as MCP Server + Claude Code Hooks (stdio)
 
-**Status:** Accepted  
+**Status:** Superseded in practice (HTTP proxy is the hot path). Accepted May 2026 as stdio-MCP + hooks; `cachelane proxy` and dual systemd units shipped later.
 **Date:** May 2026  
 **Source:** Token Reduction Research §3.2, §3.3, §3.4; Phase 2 Spec D8
 
@@ -24,7 +24,7 @@ Requires: Claude Code ≥ 0.6 (MCP server registration + PostResponse hooks).
 
 | Alternative | Rejection reason |
 |-------------|-----------------|
-| API proxy at network layer | Heavier integration; requires intercepting HTTPS; harder to install |
+| API proxy at network layer | Rejected in May 2026; **this is what shipped** (`src/proxy/server.ts`, `cachelane proxy`) |
 | Pure CLI (no hooks) | Can't intercept per-turn; would require user to manually invoke each turn |
 | Daemon process with IPC | More complex; outside the MCP ecosystem norm |
 

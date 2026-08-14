@@ -1,4 +1,9 @@
+<!-- docs-rebuild: exempt SHARD_CEILING — May 2026 systems plan; history, not a live operator doc -->
 # 06 — Systems Design
+
+**Kind:** history (May 2026 implementation plan). Module list, log path, MCP names, and
+"contents never stored" are **not** current. Schema: `src/storage/migrations/`.
+CLI: `src/cli/index.ts`. Logger: `src/logger/index.ts`.
 
 **Purpose:** Technology stack, module layout, data schemas, performance budgets, failure modes, and release milestones.  
 **Scope:** Implementation-level reference — the "how" of building Cachelane.  
@@ -35,7 +40,7 @@
 | Persistent storage | `better-sqlite3` | ^12.x | Synchronous SQLite in WAL mode; Node 22/24 prebuilt binaries |
 | ID generation | `ulid` | ^2.x | Block IDs |
 | CLI | `commander` | ^12.x | CLI parsing |
-| Logging | `pino` + `pino-pretty` | ^9.x + ^11.x | Structured logging, daily rotation |
+| Logging | `pino` + `pino-pretty` (planned) | — | **Shipped:** custom `src/logger`, not pino |
 | Config validation | `zod` | ^3.x | Schema validation |
 | Tests | `vitest` + `nock` | ^2.x + ^14.x | Unit/integration; nock for recorded API fixtures |
 | Build | `tsup` (esbuild) | ^8.x | Dual ESM/CJS output |
@@ -55,7 +60,7 @@ types
   ├── storage
   ├── tokenizer
   └── classifier
-        └── orchestrator   (hot path — classify → prune → reorder per turn)
+        └── orchestrator   (hot path — classify → prune → place breakpoints per turn)
               └── keepalive
                     └── server   (MCP server — cachelane:stats, :explain, :expand)
                           └── cli
@@ -69,11 +74,11 @@ Violations **block merge**.
 | Component | Location |
 |-----------|----------|
 | Orchestrator process | RAM |
-| Classifier, Pruner, Reorderer, Keepalive worker, MCP server, Cache-state tracker | In orchestrator process |
-| SQLite reference log | `~/.cachelane/cachelane.db` |
-| Config file | `~/.cachelane/config.json` |
-| Log files | `~/.cachelane/logs/*.log` (daily rotation, 7-day retention) |
-| Claude Code integration | `~/.claude/mcp.json` (MCP registration), `~/.claude/hooks/` (hooks) |
+| Classifier, Pruner, breakpoint placer, Keepalive worker, MCP server, Cache-state tracker | In orchestrator / proxy process |
+| SQLite reference log | `$CACHELANE_HOME/cachelane.db` (default `~/.cachelane/cachelane.db`) |
+| Config file | `$CACHELANE_HOME/config.json` |
+| Log files | `$CACHELANE_HOME/cachelane.log` (10 MiB × 5) — not `logs/*.log` |
+| Claude Code integration | `~/.claude.json` (MCP; `src/cli/paths.ts`), `~/.claude/settings.json` + `~/.claude/hooks/` |
 
 ---
 
@@ -87,7 +92,8 @@ Violations **block merge**.
 | SQLite (`~/.cachelane/cachelane.db`) | Per-block metadata (NOT contents), turn records, reference audit log | On-disk | Explicit purge |
 | Block content | Transient in orchestrator only | Never persisted | Each turn |
 
-**Block contents are NEVER stored anywhere.** Only metadata (id, kind, hashes, counters).
+**Block contents are not stored by default.** `compression.retention.enabled` (default `false`)
+may persist original tool outputs locally until `ttl_days`.
 
 ### SQLite Schema
 
@@ -188,9 +194,11 @@ CREATE INDEX idx_refs_turn  ON block_references(turn_id);
 
 | Tool | Inputs | Returns |
 |------|--------|---------|
-| `cachelane:stats` | `scope: "session" \| "workspace" \| "all"` (default `session`), `since: ISO duration` | `turns`, `cache_hit_ratio`, `effective_cost_units`, `no_cachelane_cost_units`, `savings_ratio`, pruner stats, keepalive stats |
-| `cachelane:explain` | `turn: number` (default most recent) | Region breakdown, breakpoint hashes, pruner decisions array with reasons, full usage block |
-| `cachelane:expand` | `block_id: string` (8-char prefix accepted) | Re-issues original refetch command; restored content enters suffix on next turn |
+| `cachelane_stats` | `scope: "session" \| "workspace" \| "all"` (default `session`), `since: ISO duration` | `turns`, `cache_hit_ratio`, `effective_cost_units`, `no_cachelane_cost_units`, `savings_ratio`, pruner stats, keepalive stats |
+| `cachelane_explain` | `turn: number` (default most recent) | Region breakdown, breakpoint hashes, pruner decisions array with reasons, full usage block |
+| `cachelane_expand` | `block_id: string` (8-char prefix accepted) | Trusted refetch metadata + `restoreStub`; does not re-issue the original tool |
+| `cachelane_retrieve_tool_output` | compression handle | Original tool output when retention is on |
+| `cachelane_health` | — | Health + degraded-fallback metrics |
 
 ### CLI Commands
 
@@ -325,7 +333,7 @@ lifetime. Telemetry payload allowlist prevents key inclusion.
 
 | Signal | Implementation |
 |--------|---------------|
-| Logging | Pino structured JSON, `~/.cachelane/logs/*.log`, daily rotation, 7-day retention |
+| Logging | Structured JSON, `$CACHELANE_HOME/cachelane.log`, size-rotated 10 MiB × 5 |
 | Metrics | `cachelane:stats` and `cachelane stats` CLI — cache_hit_ratio, effective_cost_units, savings_ratio, pruner/keepalive stats |
 | Per-turn trace | `cachelane:explain` — region breakdown, breakpoint placement, pruner decisions, full usage block |
 | Alerting | `cachelane doctor` warns if cache_hit_ratio < 0.2 for > 50 consecutive turns |

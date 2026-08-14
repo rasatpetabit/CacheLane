@@ -1,6 +1,6 @@
 # ADR-010: MIT License, Distribute via npm + Claude Code Plugin Marketplace
 
-**Status:** Accepted  
+**Status:** Superseded (license). npm + marketplace distribution still describes intent; the shipped license is **Apache-2.0** (`LICENSE`, `package.json`, `README.md` badge). This ADR records the May 2026 MIT decision — do not treat MIT as current.
 **Date:** May 2026  
 **Source:** Token Reduction Research §3.7; Phase 2 Spec §1.1
 

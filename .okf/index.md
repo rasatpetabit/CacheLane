@@ -9,32 +9,28 @@ tags: [cachelane, claude-code, prompt-caching, mcp, cli]
 
 # CacheLane
 
-CacheLane is a local MCP server plus Claude Code hooks (PreRequest/PostResponse)
-that sits between Claude Code and `api.anthropic.com` to cut input-token cost
-on every turn, targeting 30%-60% lower input-token cost on long sessions with
-no change to how the user drives Claude Code.
+CacheLane is a local HTTP proxy plus optional MCP server and Claude Code hooks.
+On this host it runs as two systemd units from `/srv/cachelane`. The npm CLI
+(`cachelane install`) is a different, single-user surface.
 
-Two mechanisms, per the README and `CLAUDE.md`:
+Two Anthropic-path mechanisms, per the README and current `src/`:
 
 1. **Cache-aware orchestration** — classifies each request into three
-   volatility regions (`STABLE | SEMI | VOLATILE`) and places two
-   `cache_control` breakpoints so Anthropic's prompt cache serves the stable
-   prefix at 0.1x instead of full price. Pipeline order is canonical:
-   Classifier -> Pruner -> Reorderer.
-2. **K-pruning** — replaces tool-call result blocks that have been idle for
-   >= K consecutive turns with refetchable stubs, non-lossily, to flatten
-   token growth across long sessions.
+   volatility regions (`STABLE | SEMI | VOLATILE`) and places `cache_control`
+   markers (code default `prefix_only` = one tools/system marker; `candidate`
+   can own more — [runbook-claude-effectiveness.md](../docs/runbook-claude-effectiveness.md)).
+   Pipeline: classify → prune/elide → place breakpoints. There is no Reorderer.
+2. **K-pruning** — replaces tool-call result blocks idle ≥ K turns with
+   refetchable stubs. `cachelane_expand` returns refetch metadata.
 
-Ships as an installable CLI (`npm install -g cachelane`, then `cachelane
-install` to wire hooks into Claude Code) plus a companion web dashboard
-(`web/` — README references `cache-lane.vercel.app`). Users verify it's
-working with `cachelane doctor`, `cachelane sessions`, `cachelane stats`.
+Users verify with `cachelane doctor`, `cachelane sessions`, `cachelane stats`.
+CLI `--version` prints `0.0.1` even when `package.json` is `1.1.7`.
 
 ## Key components (from `src/`)
 
 - `classifier/` — assigns STABLE/SEMI/VOLATILE volatility class to prompt blocks.
 - `pruner/` — implements K-pruning (idle tool-result stubbing).
-- `orchestrator/` — reorders/breaks the prompt per the STABLE -> SEMI -> VOLATILE pipeline.
+- `orchestrator/` — places `cache_control` breakpoints on STABLE / SEMI / VOLATILE regions.
 - `proxy/` — intercepts Claude Code <-> `api.anthropic.com` traffic.
 - `hooks/` — Claude Code PreRequest/PostResponse hook integration.
 - `server/` — the local MCP server.
@@ -58,22 +54,18 @@ working with `cachelane doctor`, `cachelane sessions`, `cachelane stats`.
 ## Pointers to existing docs
 
 - [`README.md`](../README.md) — user-facing quickstart, mechanism explainer, pricing math.
-- [`CLAUDE.md`](../CLAUDE.md) — project context for agent sessions: critical
-  invariants (pipeline order, vocabulary, naming, fail-open, local-only,
-  cache-stability gate), source documents, and the per-milestone (M2-M9)
-  implementation workflow.
-- [`INTEGRATION.md`](../INTEGRATION.md) — integration details (not read in depth here).
-- [`BENCHMARK.md`](../BENCHMARK.md) — benchmark methodology/results.
-- `designs/README.md` — full spec index and required reading order
-  (system overview, architecture, engineering specs, turns-and-pruning
-  algorithm, token-reduction research/ADRs, systems design, open questions).
-- `docs/superpowers/plans/` — per-milestone implementation plans.
+- [`CLAUDE.md`](../CLAUDE.md) — thin shim; canonical instructions are `AGENTS.md`.
+- [`docs/README.md`](../docs/README.md) — operator + history routing table.
+- [`INTEGRATION.md`](../INTEGRATION.md) — dated Headroom/LiteLLM working notes.
+- [`BENCHMARK.md`](../BENCHMARK.md) — recorded-benchmark methodology.
+- [`designs/README.md`](../designs/README.md) — May 2026 spec index (history).
+- `docs/superpowers/plans/` — dated implementation plans (archive).
 
 ## Invariants worth knowing before touching code
 
-Per `CLAUDE.md`: fail-open on any internal error (always return the
-unmutated request rather than block the model), local-only (no prompt
-content or API keys leave the direct `api.anthropic.com` request path, no
-hosted backend), and a cache-stability gate requiring byte-identical
-SHA-256 of the prefix region across 3 consecutive identical-input runs
-before merge.
+Per `AGENTS.md`: fail-open on **pre-forward pipeline** errors (forward the
+unmutated request). Startup / upstream / mid-stream failures cannot
+transparently fail open. Local-only: prompt content leaves only on the
+configured upstream hop (Anthropic or LiteLLM). Cache-stability gate:
+prefix SHA-256 identical across 3 identical-input runs
+(`src/orchestrator/__tests__/cache-stability.test.ts`).

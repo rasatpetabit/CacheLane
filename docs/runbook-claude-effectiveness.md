@@ -7,10 +7,11 @@ CacheLane's Claude lane is native Anthropic on port `7333`. Never point Claude C
 `features.marker_strategy` is hot-reloaded with the rest of `config.json`:
 
 - `passthrough`: preserve incoming Claude Code markers; do not update CacheLane frontier state.
-- `prefix_only` (default): current production behavior; own one tools/system marker.
+- `prefix_only` (code default in `src/config/defaults.ts`): own one tools/system marker.
 - `candidate`: bounded static-prefix/read-anchor/write-frontier planner.
 
-Keep production on `prefix_only` until the conformance and three-arm gates below pass.
+This host's Claude home is on `passthrough` ([lane-state.md](operations/lane-state.md)).
+Do not canary `candidate` until the conformance and three-arm gates below pass.
 
 ## Direct-provider conformance
 
@@ -52,4 +53,4 @@ Read both end-to-end and route/outcome strata. `token_reuse_index = cache_read /
 3. Drain-restart the Claude lane first; leave LiteLLM routing unchanged.
 4. Canary `marker_strategy: candidate` only after reviewing the durable gate files.
 5. Snapshot and inspect provider errors, usage-missing rate, and effective input units.
-6. Roll back to `prefix_only` immediately on regressions.
+6. Roll back to the **pre-canary** `marker_strategy` in that home's `config.json` (this host: `passthrough` — [lane-state.md](operations/lane-state.md)). Do not assume `prefix_only`; that is the code default, not necessarily the live baseline.

@@ -1,50 +1,52 @@
-# Cachelane Design Suite — Index
+# Cachelane Design Suite — May 2026 spec (history)
 
-This folder is the single source of truth for implementing Cachelane. A new agent reading
-only this folder should be able to begin implementation without consulting the raw source documents.
+**Kind:** decision/history. Synthesized May 2026 from five source documents.
 
-**Document set status:** Complete as of May 2026. Synthesized from 5 source documents (see CLAUDE.md).
+This folder is **not** the current-state map of the shipped system. Code
+(`src/`), the production install (`/srv/cachelane`), and
+[`docs/README.md`](../docs/README.md) win on drift.
 
----
+Still binding from this suite (also restated in `AGENTS.md`):
+
+- Vocabulary `STABLE | SEMI | VOLATILE`
+- Prune/elide **before** placing `cache_control` breakpoints
+- Fail-open; local-only
+- Cache-stability gate (prefix SHA-256 identical across 3 identical-input runs)
+- snake_case at storage / API boundaries
+
+Superseded by the shipped system (do not implement these as if they were now):
+
+- A `Reorderer` that physically reorders conversation blocks — code classifies and
+  marks breakpoints; `README.md` states it does **not** reorder
+- stdio-only MCP, “no network ports” (ADR-005) — the hot path is `cachelane proxy`
+- MCP tool names `cachelane:stats` — registered names are `cachelane_*`
+- `cachelane:expand` re-issues the original tool — `cachelane_expand` returns
+  refetch metadata and restores the stub row
+- Pino + `~/.cachelane/logs/` daily/7-day — `src/logger` writes
+  `$CACHELANE_HOME/cachelane.log` (10 MiB × 5)
+- MIT license (ADR-010) — `LICENSE` / `package.json` are Apache-2.0
+- MCP registration at `~/.claude/mcp.json` — default is `~/.claude.json`
 
 ## Reading Order
 
-**For an agent starting implementation:**
-1. [`01-system-overview.md`](01-system-overview.md) — understand the product and its terms (10 min)
-2. [`02-architecture.md`](02-architecture.md) — understand what exists and how it connects (20 min)
-3. [`04-turns-and-pruning.md`](04-turns-and-pruning.md) — understand the core algorithm (15 min)
-4. [`06-systems-design.md`](06-systems-design.md) — understand the implementation plan (30 min)
-5. [`03-engineering-specs.md`](03-engineering-specs.md) — check specific requirements as needed
+**For an agent starting implementation today:** [`../docs/README.md`](../docs/README.md), then
+[`../README.md`](../README.md), then code. Use this folder for *why* a 2026 decision was made.
 
-**For a reviewer or architect:**
-- Read all files. Start with `01` and `05` for context and rationale.
-
----
+**For a reviewer of the original design:** start with `01` and `05`.
 
 ## File Map
 
-| File | Contents | Primary Source |
-|------|----------|----------------|
-| [`01-system-overview.md`](01-system-overview.md) | Goals, non-goals, product summary, full glossary | All documents |
-| [`02-architecture.md`](02-architecture.md) | All 7 diagrams interpreted as text, component catalog, interaction catalog, deployment topology | Engineering Diagrams v2 |
-| [`03-engineering-specs.md`](03-engineering-specs.md) | REQ-F-001–037, REQ-NF-001–029, API contracts, data models, acceptance criteria | Phase 2 Spec v2 |
-| [`04-turns-and-pruning.md`](04-turns-and-pruning.md) | Turn model, K-pruning algorithm with pseudocode, worked examples, edge cases, config knobs | Turns & Pruning Explainer |
-| [`05-token-reduction.md`](05-token-reduction.md) | Research findings, 5 methodologies evaluated, 10 ADRs, performance targets, validation plan | Token Reduction Research |
-| [`06-systems-design.md`](06-systems-design.md) | Tech stack, 8-module layout, SQLite schemas, per-turn overhead budgets, failure modes, milestones M1–M9 | Systems Design Document v2 |
-| [`07-open-questions.md`](07-open-questions.md) | Remaining open questions with owners and resolution status | Phase 2 Spec v2 + synthesis |
-| [`decisions/`](decisions/) | Individual architecture decision records (ADR-001 onward) | Research + implementation decisions |
-
----
-
-## Key Cross-References
-
-- **Pipeline order decision**: [ADR-005](decisions/ADR-005-mcp-hooks-deployment.md) + [02-architecture.md §Per-Turn Flow](02-architecture.md#per-turn-api-flow-d4)
-- **K value rationale**: [ADR-008](decisions/ADR-008-conservative-pruner-default.md) + [04-turns-and-pruning.md §Config Knobs](04-turns-and-pruning.md#configuration-knobs)
-- **Cache breakpoint strategy**: [ADR-006](decisions/ADR-006-three-region-two-breakpoints.md) + [02-architecture.md §Block Model](02-architecture.md#block-model-and-cache-boundaries-d2)
-- **Why not embeddings**: [ADR-004 + REQ-F-025](03-engineering-specs.md#functional-requirements) + [05-token-reduction.md](05-token-reduction.md)
-- **100-session corpus gate**: [AC-5, AC-6](03-engineering-specs.md#acceptance-criteria) + [06-systems-design.md §M4](06-systems-design.md#milestones)
-
----
+| File | Question it answers | Kind |
+|------|---------------------|------|
+| [`01-system-overview.md`](01-system-overview.md) | What did v1 claim to be (goals, glossary)? | history |
+| [`02-architecture.md`](02-architecture.md) | How were the seven diagrams described? | history |
+| [`03-engineering-specs.md`](03-engineering-specs.md) | What were REQ-F / REQ-NF / AC? | history + some still-normative |
+| [`04-turns-and-pruning.md`](04-turns-and-pruning.md) | How was K-pruning specified? | history (algorithm still close) |
+| [`05-token-reduction.md`](05-token-reduction.md) | Why M1+M2 over the other four methods? | history |
+| [`06-systems-design.md`](06-systems-design.md) | What module/schema/milestone plan was written? | history |
+| [`07-open-questions.md`](07-open-questions.md) | Which Q### were open in May 2026? | history — statuses not refreshed |
+| [`2026-05-24-zero-config-auto-proxy.md`](2026-05-24-zero-config-auto-proxy.md) | How was auto-proxy designed? | history |
+| [`decisions/README.md`](decisions/README.md) | Why was each ADR accepted? Check **Status** | history |
 
 ## Stable ID Prefixes
 

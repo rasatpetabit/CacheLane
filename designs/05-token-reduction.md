@@ -1,4 +1,7 @@
+<!-- docs-rebuild: exempt SHARD_CEILING — May 2026 research narrative; history, not a live operator doc -->
 # 05 — Token Reduction Research & Design Rationale
+
+**Kind:** history (Phase 1 research). Savings percentages and "reorders" language are 2026 research claims, not a live measurement.
 
 **Purpose:** Research findings, methodology evaluation, ADRs, and performance targets.  
 **Scope:** The "why" behind the chosen approach — institutional knowledge for future decisions.  
@@ -111,7 +114,7 @@ Prefix = 30k tokens, reused across 10 turns:
 | Score | 100 |
 | Expected savings | **30–60%** on cacheable workloads |
 
-**Mechanism:** Middleware that classifies each prompt block by volatility, reorders into three regions
+**Mechanism:** Middleware that classifies each prompt block by volatility into three regions
 (stable prefix → semi-stable middle → volatile suffix), and places two `cache_control` breakpoints.
 A keepalive worker pings every ~4 minutes to prevent TTL expiry.
 

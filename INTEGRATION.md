@@ -1,5 +1,9 @@
 # CacheLane × Headroom × LiteLLM — Integration Plan
 
+**Kind:** decision/history (working notes, 2026-06-29 onward). Not the live runbook.
+Current LiteLLM ops: [`docs/runbook-litellm.md`](docs/runbook-litellm.md).
+Live flags: [`docs/operations/lane-state.md`](docs/operations/lane-state.md).
+
 > Working notes for the `headroom-litellm-integration` branch.
 > Goal: make CacheLane cache-discipline + pruning applicable to more than
 > Claude, and fit it into the existing headroom / litellm model pipeline.
@@ -112,7 +116,7 @@ Move breakpoint-placement + K-pruning + keepalive into headroom's `cache_stabili
 - **7 npm vulnerabilities (4 mod, 2 high, 1 crit)** in baseline deps — track but don't fix unrelated upstream issues yet.
 - 2026-07-17: migration `012_session_scoped_blocks` — blocks PK is `(session_id, id)`; insert UPSERT preserves is_stub on same content_hash. Applied on smoke DB.
 - 2026-07-17: all non-dispatch LiteLLM models enabled on Pi via CacheLane :7332; openai-codex kept as Pi GPT backup; Claude Code uses separate CacheLane :7333 → api.anthropic.com (NOT LiteLLM); soak skipped.
-- 2026-07-17: `cachelane-anthropic.service` on :7333 (CACHELANE_HOME=~/.cachelane, upstream Anthropic). CC `ANTHROPIC_BASE_URL=http://127.0.0.1:7333`.
+- 2026-07-17: Claude unit is `cachelane-claude.service` (not `cachelane-anthropic.service`) on :7333 (`CACHELANE_HOME=~/.cachelane-claude`, upstream Anthropic). CC `ANTHROPIC_BASE_URL=http://127.0.0.1:7333`.
 - 2026-07-17: production runtime `/srv/cachelane`; dual units smoke:7332→LiteLLM + anthropic:7333→api.anthropic.com; CLI honors config proxy.port; health-dual.mjs green.
 - 2026-07-17: CC live OAuth via :7333 verified; `cachelane install` MCP+hooks; Pi flushCompactionQueue streaming-safe patch applied (global + pi-fork dist).
 - 2026-07-17: rollout COMPLETE — install-runtime.sh, rollback-client-config.sh, linger enabled, health-dual green; soak skipped.

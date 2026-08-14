@@ -1,5 +1,7 @@
 # 04 — Turns and Pruning
 
+**Kind:** history + still-close algorithm. Pipeline third stage is breakpoint placement, not a Reorderer. Expand tool is `cachelane_expand` (metadata + restore), not a tool re-issue.
+
 **Purpose:** Complete algorithmic specification for the turn model and K-pruning algorithm.  
 **Scope:** Algorithm-level — precise enough to implement and test against without reading the source doc.  
 **Source:** `Cachelane_Turns_and_Pruning_Explainer.html` (intuition + worked examples) and
@@ -61,7 +63,7 @@ stateDiagram-v2
 
 - Pruning runs at each turn boundary (after the assistant turn completes)
 - **PreRequest phase**: load `unusedTurns` from SQLite; pass to Pruner
-- **Pruner runs before Reorderer** (canonical pipeline order: Classifier → Pruner → Reorderer)
+- **Pruner runs before breakpoint placement** (canonical pipeline order: Classifier → Pruner → `orchestrate`)
 - **PostResponse phase**: run reference detection; update `unusedTurns` in SQLite
 
 ### Selection Policy
@@ -114,7 +116,7 @@ referenced becomes: idle 1 at T+1, idle 2 at T+2, stubbed at T+3 (when K=3).
 2. Stubs **retain the block's identifier** — so downstream reference detection still works
 3. Stubs **never expire further** — `unused_turns` stops incrementing once stubbed
 4. Stubs are **refetchable on demand** via `cachelane:expand` → non-lossy at the application layer
-5. The Reorderer receives the **post-pruned** block list — breakpoints are computed on final sizes
+5. Breakpoint placement receives the **post-pruned** block list — breakpoints are computed on final sizes
 
 ### Invariants
 
@@ -127,7 +129,7 @@ referenced becomes: idle 1 at T+1, idle 2 at T+2, stubbed at T+3 (when K=3).
 | I5 | Sequence preservation: stubs occupy the same position in the prompt as the original block |
 | I6 | Pinned/STABLE exemption: these blocks never tick and are never stubbed |
 | I7 | Stubs are themselves blocks and do not tick further |
-| I8 | `(tool_use, tool_result)` pairs are moved only as atomic units by the Reorderer |
+| I8 | `(tool_use, tool_result)` pairs are never split; shipped code does not reorder them |
 
 ### Complexity Analysis
 
@@ -213,7 +215,7 @@ full timeline matrix (Blocks A–D across turns T1–T5).
 | K=0 | Not a valid configuration (minimum K=1 per config schema range) |
 | K=1 | Every block that is not referenced in the current turn is immediately stubbed |
 | Block referenced again before idle ≥ K | Counter resets to 0; block stays active |
-| Block already stubbed and re-referenced (model calls `cachelane:expand`) | Restored to active; `unused_turns` resets to 0 |
+| Block already stubbed and re-referenced (model calls `cachelane_expand`) | Stub row restored; `unused_turns` resets to 0; tool returns refetch metadata |
 | Very small block (few tokens) | Still eligible for stubbing if idle ≥ K |
 | Large reply with many tool calls in one turn | All resulting blocks share the same creation turn; they age together |
 | Pinned block | Never ticks; exempt from all pruning |
@@ -246,7 +248,7 @@ full timeline matrix (Blocks A–D across turns T1–T5).
   miss the cache on that segment
 - Implication: placing frequently-referenced blocks early (in the stable prefix region) prevents
   cache misses from stubs appearing in the prefix
-- The Pruner runs before the Reorderer — the Reorderer receives the final (post-stub) block set
+- The Pruner runs before breakpoint placement — `orchestrate` receives the final (post-stub) block set
   and places breakpoints that reflect the actual byte layout
 
 ---
