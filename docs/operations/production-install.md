@@ -89,19 +89,19 @@ consecutive misses plus an idle drain are required before a restart. Prefer the
 `/healthz` `inflight` field over ESTABLISHED sockets so keep-alive clients do not
 block drain forever.
 
-## `Documentation=` leak
+## `Documentation=` (fixed 2026-08-14)
 
 Both proxy units set
 
 ```
-Documentation=file:///srv/dev/ai/cachelane/docs/runbook-litellm.md
+Documentation=file:///srv/cachelane/docs/runbook-litellm.md
 ```
 
-That is written by `scripts/install-runtime.sh`. Production therefore **resolves a
-doc path through `/srv/dev`**. The process itself does not execute from `/srv/dev`.
-Do not treat the `Documentation=` line as proof that the service is allowed to
-run from the checkout. Fixing the pointer is an installer change, outside a docs
-edit.
+`scripts/install-runtime.sh` copies `docs/` into the install and writes the
+unit with `$INSTALL` in the path, so production does **not** resolve a doc
+through `/srv/dev`. This replaces the earlier `file:///srv/dev/...` value. A
+unit still carrying `/srv/dev` in `Documentation=` is an un-reinstalled pre-fix
+tree — run `install-runtime.sh` again to converge.
 
 ## After install
 

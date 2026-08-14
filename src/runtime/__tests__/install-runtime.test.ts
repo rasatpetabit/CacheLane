@@ -26,6 +26,12 @@ describe("install-runtime restart safety", () => {
     expect(installer).not.toContain("VACUUM");
   });
 
+  it("points unit Documentation= at the install tree, not /srv/dev", () => {
+    expect(installer).not.toContain("Documentation=file:///srv/dev");
+    expect(installer).toContain("Documentation=file://$INSTALL/docs/runbook-litellm.md");
+    expect(installer).toContain('cp -a "$REPO_ROOT/docs" "$STAGE/docs"');
+  });
+
   it("waits for two idle samples before each lane restart", () => {
     expect(installer).toContain("wait_for_lane_drain()");
     expect(installer).toContain('CACHELANE_DRAIN_TIMEOUT_SEC:-300');

@@ -118,6 +118,9 @@ mkdir -p "$STAGE/dist" "$STAGE/scripts"
 rsync -a "$REPO_ROOT/dist/" "$STAGE/dist/"
 rsync -a "$REPO_ROOT/scripts/" "$STAGE/scripts/"
 cp -a "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$STAGE/"
+# Ship operator docs with the install so unit Documentation= can point at a
+# production copy instead of resolving back into /srv/dev (production-boundary).
+cp -a "$REPO_ROOT/docs" "$STAGE/docs"
 (cd "$STAGE" && PATH="$RUNTIME_NODE_DIR:$PATH" npm ci --omit=dev)
 (cd "$STAGE" && "$NODE_BIN" --input-type=commonjs -e \
   'const Database = require("better-sqlite3"); const db = new Database(":memory:"); db.prepare("SELECT 1").get(); db.close();')
@@ -169,7 +172,7 @@ fi
 sudo tee "$UNIT_DIR/cachelane-litellm.service" >/dev/null <<UNIT
 [Unit]
 Description=CacheLane LiteLLM proxy (:7332 → LiteLLM)
-Documentation=file:///srv/dev/ai/cachelane/docs/runbook-litellm.md
+Documentation=file://$INSTALL/docs/runbook-litellm.md
 After=network-online.target litellm.service litellm-gateway-proxy.service
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -206,7 +209,7 @@ UNIT
 sudo tee "$UNIT_DIR/cachelane-claude.service" >/dev/null <<UNIT
 [Unit]
 Description=CacheLane Claude/Anthropic proxy (:7333 → api.anthropic.com)
-Documentation=file:///srv/dev/ai/cachelane/docs/runbook-litellm.md
+Documentation=file://$INSTALL/docs/runbook-litellm.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0
