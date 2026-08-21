@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "receipts": [
+    {
+      "createdAt": "2026-08-17T01:25:24.545Z",
+      "bankId": "coding",
+      "documentId": "pi-session:70f1251bb4081700",
+      "queueJobId": "7fd3eb6d-cd0c-41f5-8ff5-51cfba864fbb",
+      "updateMode": "append",
+      "source": "queue",
+      "context": "Pi coding session for repo \"cachelane\", session 2026-08-17T01-04-18-701Z_01a00d3f-790d-774b-8f12-572940218ff2.jsonl",
+      "tags": [
+        "source:pi",
+        "harness:pi",
+        "project:github-com-rasatpetabit-cachelane",
+        "repo:cachelane-7dee34571eec",
+        "session:70f1251bb4081700"
+      ],
+      "outcome": {
+        "itemsCount": 1,
+        "operations": 1
+      }
+    },
+    {
+      "createdAt": "2026-08-14T22:50:21.154Z",
+      "bankId": "coding",
+      "documentId": "pi-session:3e353dbce1b31090",
+      "queueJobId": "0885cf20-7b75-4e66-a9be-01f5eb3e2917",
+      "updateMode": "append",
+      "source": "queue",
+      "context": "Pi coding session for repo \"cachelane\", session 2026-08-14T18-34-14-861Z_01a0018d-a3cd-70b5-a939-2d3f9918ff3f.jsonl",
+      "tags": [
+        "source:pi",
+        "harness:pi",
+        "project:github-com-rasatpetabit-cachelane",
+        "repo:cachelane-7dee34571eec",
+        "session:3e353dbce1b31090"
+      ],
+      "outcome": {
+        "itemsCount": 1,
+        "operations": 1
+      }
+    },
+    {
+      "createdAt": "2026-08-14T21:34:53.613Z",
+      "bankId": "cachelane",
+      "documentId": "pi-explicit:3e353dbce1b31090:50cdd95f086834d8",
+      "queueJobId": "985e5bd2-3217-449c-85bb-c5cdf1c41a37",
+      "updateMode": "replace",
+      "source": "tool",
+      "context": "docs-rebuild high-tier apply of all markdown under /srv/dev/ai/cachelane; corrections derived from src/, live config.json, systemd units, /srv/cachelane GIT_SHA.",
+      "tags": [
+        "source:pi",
+        "harness:pi",
+        "project:github-com-rasatpetabit-cachelane",
+        "repo:cachelane-7dee34571eec",
+        "session:3e353dbce1b31090"
+      ],
+      "outcome": {
+        "itemsCount": 1,
+        "operations": 1
+      }
+    },
+    {
+      "createdAt": "2026-08-14T20:28:34.474Z",
+      "bankId": "coding",
+      "documentId": "pi-session:ee7a9677854a5659",
+      "queueJobId": "1646e805-8f18-49ef-9e09-5e8d0de9add4",
+      "updateMode": "append",
+      "source": "queue",
+      "context": "Pi coding session for repo \"cachelane\", session 2026-08-14T20-21-46-738Z_01a001f0-1672-73b2-bda8-71f89d23ca06.jsonl",
+      "tags": [
+        "source:pi",
+        "harness:pi",
+        "project:github-com-rasatpetabit-cachelane",
+        "repo:cachelane-7dee34571eec",
+        "session:ee7a9677854a5659"
+      ],
+      "outcome": {
+        "itemsCount": 1,
+        "operations": 1
+      }
+    },
+    {
+      "createdAt": "2026-08-14T20:00:18.406Z",
+      "bankId": "coding",
+      "documentId": "pi-session:e7c6c16ce568ebeb",
+      "queueJobId": "99488668-07e2-4428-9630-9372f9ae4bc9",
+      "updateMode": "append",
+      "source": "queue",
+      "context": "Pi coding session for repo \"cachelane\", session 2026-08-14T20-00-02-755Z_01a001dc-30c3-7da7-a0fd-212253fded16.jsonl",
+      "tags": [
+        "source:pi",
+        "harness:pi",
+        "project:github-com-rasatpetabit-cachelane",
+        "repo:cachelane-7dee34571eec",
+        "session:e7c6c16ce568ebeb"
+      ],
+      "outcome": {
+        "itemsCount": 1,
+        "operations": 1
+      }
+    }
+  ]
+}
